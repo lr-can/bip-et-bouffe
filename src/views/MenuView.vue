@@ -49,7 +49,10 @@ const moodOptions = computed(() =>
 )
 
 const allergyAvoidOptions = computed(() =>
-  recipes.allergenOptions.map((a) => a.nomAllergie),
+  recipes.allergenOptions.map((a) => ({
+    label: a.nomAllergie,
+    value: a.nomAllergie,
+  })),
 )
 
 const selectedAllergies = computed({
@@ -242,7 +245,9 @@ onMounted(() => {
           <MultiSelect
             v-model="selectedAllergies"
             :options="allergyAvoidOptions"
-            placeholder="Choisir dans la liste…"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="Choisir dans la liste allergènes…"
             display="chip"
             filter
             fluid
@@ -273,7 +278,13 @@ onMounted(() => {
           @click="menu.setActiveDay(i)"
         >
           <span class="day-num">J{{ i + 1 }}</span>
-          <span class="day-meta">{{ day.filled ? `${day.cost.toFixed(0)}€` : '—' }}</span>
+          <span class="day-meta">
+            <template v-if="day.filled">
+              {{ day.cost.toFixed(0) }}€
+              <template v-if="day.nutrition?.kcal"> · {{ Math.round(day.nutrition.kcal) }} kcal</template>
+            </template>
+            <template v-else>—</template>
+          </span>
         </button>
       </div>
 
@@ -281,7 +292,15 @@ onMounted(() => {
         <div class="day-panel-head">
           <div>
             <h2 class="cm-display">Jour {{ menu.activeDay + 1 }}</h2>
-            <p class="muted">{{ menu.dayCost(menu.activeDay).toFixed(2) }} € estimés</p>
+            <p class="muted">
+              {{ menu.dayCost(menu.activeDay).toFixed(2) }} € estimés
+              <template v-if="menu.dayNutrition(menu.activeDay).kcal">
+                · {{ Math.round(menu.dayNutrition(menu.activeDay).kcal) }} kcal
+                (P {{ menu.dayNutrition(menu.activeDay).proteines }}g /
+                G {{ menu.dayNutrition(menu.activeDay).glucides }}g /
+                L {{ menu.dayNutrition(menu.activeDay).lipides }}g)
+              </template>
+            </p>
           </div>
           <div class="day-panel-actions">
             <Button icon="pi pi-trash" rounded text severity="secondary" aria-label="Vider le jour" @click="menu.clearDay()" />

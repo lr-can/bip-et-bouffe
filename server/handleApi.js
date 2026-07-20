@@ -13,6 +13,7 @@ import {
   rewriteSheet,
   deleteRecipeById,
 } from './sheetsCore.js'
+import { resolveNutrition, sleep } from './nutrition.js'
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -314,6 +315,124 @@ export async function handleApi(req) {
           return json({ ok: true, ...result })
         }
       }
+    }
+
+    if (method === 'POST' && path === '/api/nutrition/lookup') {
+      const body = (await readBody(req)) || {}
+      const name = String(body.name || body.nomIngr || '').trim()
+      if (!name) return json({ error: 'name requis' }, 400)
+      const result = await resolveNutrition(name, { preferApi: body.preferApi !== false })
+      if (!result) return json({ ok: false, found: false, name })
+      return json({ ok: true, found: true, name, ...result })
+    }
+
+    if (method === 'POST' && path === '/api/nutrition/enrich') {
+      const body = (await readBody(req)) || {}
+      const force = Boolean(body.force)
+      const sheets = getSheetsClient()
+      const { rows } = await readSheetObjects(sheets, 'ingredients')
+      let updated = 0
+      let skipped = 0
+      const out = []
+
+      for (const row of rows) {
+        const hasNutrition = Number(row.kcal100) > 0 || Number(row.proteines100) > 0
+        if (hasNutrition && !force) {
+          skipped += 1
+          out.push(row)
+          continue
+        }
+        const nutrition = await resolveNutrition(row.nomIngr)
+        await sleep(4500) // ~13 req/min — limite Open Food Facts
+        if (!nutrition) {
+          out.push(row)
+          skipped += 1
+          continue
+        }
+        updated += 1
+        out.push({
+          ...row,
+          kcal100: nutrition.kcal100,
+          proteines100: nutrition.proteines100,
+          glucides100: nutrition.glucides100,
+          lipides100: nutrition.lipides100,
+          nutritionSource: nutrition.nutritionSource || '',
+        })
+      }
+
+      await rewriteSheet(sheets, 'ingredients', out)
+      return json({ ok: true, updated, skipped, total: rows.length })
+    }
+
+    if (method === 'POST' && path === '/api/ingredients/import') {
+      const body = (await readBody(req)) || {}
+      const items = Array.isArray(body.items) ? body.items : []
+      if (!items.length) return json({ error: 'items[] requis' }, 400)
+
+      const sheets = getSheetsClient()
+      for (const sheet of Object.values(SHEETS)) {
+        await ensureHeaders(sheets, sheet)
+      }
+      const existing = await readSheetObjects(sheets, 'ingredients')
+      const byName = new Map(
+        existing.rows.map((r) => [String(r.nomIngr || '').trim().toLowerCase(), r]),
+      )
+
+      const toCreate = []
+      let enriched = 0
+      for (const raw of items) {
+        const nomIngr = String(raw.nomIngr || raw.nom || raw.name || raw.produit || '').trim()
+        if (!nomIngr) continue
+        const key = nomIngr.toLowerCase()
+        if (byName.has(key)) continue
+
+        let nutrition = {
+          kcal100: raw.kcal100 ?? '',
+          proteines100: raw.proteines100 ?? '',
+          glucides100: raw.glucides100 ?? '',
+          lipides100: raw.lipides100 ?? '',
+          nutritionSource: raw.nutritionSource || '',
+        }
+        if (!nutrition.kcal100 && body.enrich !== false) {
+          const looked = await resolveNutrition(nomIngr, {
+            barcode: String(raw.barcode || raw.code || raw.ean || ''),
+          })
+          await sleep(4500) // Open Food Facts rate limit
+          if (looked) {
+            nutrition = {
+              kcal100: looked.kcal100,
+              proteines100: looked.proteines100,
+              glucides100: looked.glucides100,
+              lipides100: looked.lipides100,
+              nutritionSource: looked.nutritionSource || '',
+            }
+            enriched += 1
+          }
+        }
+
+        const idIngr =
+          String(raw.idIngr || '').trim() ||
+          `ing-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+        const row = {
+          idIngr,
+          nomIngr,
+          unite: String(raw.unite || 'g'),
+          prixUnitaire: String(raw.prixUnitaire ?? raw.prix ?? 0),
+          saison: String(raw.saison || 'toute'),
+          idAllergie: String(raw.idAllergie || ''),
+          ...nutrition,
+        }
+        toCreate.push(row)
+        byName.set(key, row)
+      }
+
+      await appendRows(sheets, 'ingredients', toCreate)
+      return json({
+        ok: true,
+        created: toCreate.length,
+        enriched,
+        totalAfter: byName.size,
+      })
     }
 
     return json({ error: 'Not found' }, 404)

@@ -7,12 +7,19 @@ import InputText from 'primevue/inputtext'
 import InputNumber from 'primevue/inputnumber'
 import Textarea from 'primevue/textarea'
 import Select from 'primevue/select'
+import MultiSelect from 'primevue/multiselect'
 import AutoComplete from 'primevue/autocomplete'
 import Steps from 'primevue/steps'
 import Message from 'primevue/message'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
+import { sheetsApi } from '@/services/sheetsApi'
 import { RECIPE_TYPES, fuzzyMatch, newId, toNumber } from '@/utils/recipe'
+import {
+  macrosForQuantity,
+  formatMacros,
+  defaultQtyForUnit,
+} from '@/utils/nutrition'
 
 const sheets = useSheetsStore()
 const recipes = useRecipesStore()
@@ -54,12 +61,18 @@ const stepsList = ref([{ texte: '', ordre: 1 }])
 const ingredientQuery = ref(null)
 const ingredientSuggestions = ref([])
 const showNewIngredient = ref(false)
+const lookingUp = ref(false)
+const savingCatalog = ref(false)
+const nutritionPreview = ref(null)
+const catalogFilter = ref('')
+const openCategories = ref({})
 const newIngredient = reactive({
   nomIngr: '',
   unite: 'g',
   prixUnitaire: 0,
   saison: 'toute',
   idAllergie: null,
+  categorie: '',
 })
 
 const allergenSelectOptions = computed(() => [
@@ -70,13 +83,104 @@ const allergenSelectOptions = computed(() => [
   })),
 ])
 
-const suggestions = computed(() =>
-  recipes.suggestedIngredients({
-    type: form.type,
-    mood: form.mood,
-    limit: 8,
-  }),
+/** Allergies recette = liste issue de la feuille allergenes */
+const recipeAllergyOptions = computed(() =>
+  recipes.allergenOptions.map((a) => ({
+    label: a.nomAllergie,
+    value: a.nomAllergie,
+  })),
 )
+
+const selectedRecipeAllergies = computed({
+  get() {
+    return String(form.allergie || '')
+      .split(/[,;/|]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+  },
+  set(values) {
+    form.allergie = (values || []).join(', ')
+  },
+})
+
+const categorySelectOptions = computed(() => {
+  const fromData = recipes.categoryOptions
+  const extras = [
+    'Produits laitiers',
+    'Fromage',
+    'Œuf',
+    'Féculents & Céréales',
+    'Légumes',
+    'Fruits',
+    'Légumineuses',
+    'Viande',
+    'Poisson & Fruits de mer',
+    'Fruits secs & Oléagineux',
+    'Matières grasses',
+    'Épicerie sucrée & Pâtisserie',
+    'Condiments & Sauces',
+    'Épices & Aromates',
+    'Boissons végétales',
+    'Vins & Alcools',
+  ]
+  return [...new Set([...fromData, ...extras])].sort((a, b) => a.localeCompare(b, 'fr'))
+})
+
+const catalogCount = computed(() => recipes.catalogIngredients.length)
+
+const nestedCatalog = computed(() => {
+  const selected = new Set(links.value.map((l) => l.idIngr))
+  const q = catalogFilter.value
+  return recipes.catalogByCategory
+    .map((group) => ({
+      name: group.name,
+      items: group.items.filter(
+        (i) => !selected.has(i.idIngr) && (!q || fuzzyMatch(i.nomIngr, q) || fuzzyMatch(group.name, q)),
+      ),
+    }))
+    .filter((g) => g.items.length > 0)
+})
+
+const recipeMacrosPreview = computed(() => {
+  const parts = links.value.map((l) =>
+    macrosForQuantity(l, Number(l.qteParPersonne) || 0),
+  )
+  const perPerson = parts.reduce(
+    (acc, m) => ({
+      kcal: acc.kcal + m.kcal,
+      proteines: acc.proteines + m.proteines,
+      glucides: acc.glucides + m.glucides,
+      lipides: acc.lipides + m.lipides,
+    }),
+    { kcal: 0, proteines: 0, glucides: 0, lipides: 0 },
+  )
+  const n = Number(form.nbPerso) || 1
+  return {
+    perPerson: {
+      kcal: Math.round(perPerson.kcal * 10) / 10,
+      proteines: Math.round(perPerson.proteines * 10) / 10,
+      glucides: Math.round(perPerson.glucides * 10) / 10,
+      lipides: Math.round(perPerson.lipides * 10) / 10,
+    },
+    total: {
+      kcal: Math.round(perPerson.kcal * n * 10) / 10,
+      proteines: Math.round(perPerson.proteines * n * 10) / 10,
+      glucides: Math.round(perPerson.glucides * n * 10) / 10,
+      lipides: Math.round(perPerson.lipides * n * 10) / 10,
+    },
+  }
+})
+
+const suggestions = computed(() => {
+  const selected = new Set(links.value.map((l) => l.idIngr))
+  return recipes
+    .suggestedIngredients({
+      type: form.type,
+      mood: form.mood,
+      limit: 10,
+    })
+    .filter((ing) => !selected.has(ing.idIngr))
+})
 
 const canNext = computed(() => {
   if (step.value === 0) return Boolean(form.nomRecette.trim() && form.type)
@@ -85,11 +189,44 @@ const canNext = computed(() => {
   return true
 })
 
+function macrosLabel(ing) {
+  if (!ing) return ''
+  const kcal = Number(ing.kcal100)
+  const hasAny =
+    String(ing.kcal100 ?? '').trim() !== '' ||
+    String(ing.proteines100 ?? '').trim() !== '' ||
+    String(ing.nutritionSource || '').trim()
+  if (!hasAny) return ''
+  return `${Math.round(kcal || 0)} kcal/100g · P${ing.proteines100 || 0} G${ing.glucides100 || 0} L${ing.lipides100 || 0}`
+}
+
+function linkMacros(link) {
+  return macrosForQuantity(link, Number(link.qteParPersonne) || 0)
+}
+
+function toggleCategory(name) {
+  openCategories.value = {
+    ...openCategories.value,
+    [name]: !openCategories.value[name],
+  }
+}
+
+function ensureCategoriesOpen() {
+  if (catalogFilter.value.trim()) {
+    const next = { ...openCategories.value }
+    for (const g of nestedCatalog.value) next[g.name] = true
+    openCategories.value = next
+  }
+}
+
+watch(catalogFilter, () => ensureCategoriesOpen())
+
 function searchIngredients(event) {
   const q = event.query || ''
   const selected = new Set(links.value.map((l) => l.idIngr))
-  ingredientSuggestions.value = (sheets.data.ingredients || [])
+  ingredientSuggestions.value = recipes.catalogIngredients
     .filter((i) => !selected.has(i.idIngr) && fuzzyMatch(i.nomIngr, q))
+    .slice(0, 20)
 }
 
 function addExistingIngredient(ing) {
@@ -99,9 +236,15 @@ function addExistingIngredient(ing) {
     idIngr: ing.idIngr,
     nomIngr: ing.nomIngr,
     unite: ing.unite,
+    categorie: ing.categorie || '',
     idAllergie: ing.idAllergie || '',
     nomAllergie: recipes.allergenName(ing.idAllergie),
-    qteParPersonne: 1,
+    kcal100: ing.kcal100 || '',
+    proteines100: ing.proteines100 || '',
+    glucides100: ing.glucides100 || '',
+    lipides100: ing.lipides100 || '',
+    nutritionSource: ing.nutritionSource || '',
+    qteParPersonne: defaultQtyForUnit(ing.unite),
     isNew: false,
   })
   ingredientQuery.value = null
@@ -111,29 +254,98 @@ function addSuggested(ing) {
   addExistingIngredient(ing)
 }
 
-function createIngredient() {
-  if (!newIngredient.nomIngr.trim()) return
-  const id = newId('ing')
-  const idAllergie = newIngredient.idAllergie || ''
-  links.value.push({
-    idIngr: id,
-    nomIngr: newIngredient.nomIngr.trim(),
-    unite: newIngredient.unite || '',
-    prixUnitaire: newIngredient.prixUnitaire ?? 0,
-    saison: newIngredient.saison || 'toute',
-    idAllergie,
-    nomAllergie: recipes.allergenName(idAllergie),
-    qteParPersonne: 1,
-    isNew: true,
-  })
-  Object.assign(newIngredient, {
-    nomIngr: '',
-    unite: 'g',
-    prixUnitaire: 0,
-    saison: 'toute',
-    idAllergie: null,
-  })
-  showNewIngredient.value = false
+async function lookupCatalogNutrition() {
+  const nomIngr = newIngredient.nomIngr.trim()
+  if (!nomIngr) return
+  lookingUp.value = true
+  nutritionPreview.value = null
+  try {
+    const looked = await sheetsApi.lookupNutrition(nomIngr)
+    if (!looked?.found) {
+      toast.add({
+        severity: 'warn',
+        summary: 'Introuvable',
+        detail: 'Pas de macros trouvées pour ce nom — essaie un autre libellé.',
+        life: 3500,
+      })
+      return
+    }
+    nutritionPreview.value = looked
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Erreur',
+      detail: err.message || 'Recherche nutrition impossible',
+      life: 3500,
+    })
+  } finally {
+    lookingUp.value = false
+  }
+}
+
+async function addToCatalogAndRecipe() {
+  const nomIngr = newIngredient.nomIngr.trim()
+  if (!nomIngr) return
+  if (!nutritionPreview.value?.found) {
+    await lookupCatalogNutrition()
+    if (!nutritionPreview.value?.found) return
+  }
+
+  savingCatalog.value = true
+  try {
+    const idAllergie = newIngredient.idAllergie || ''
+    const nutrition = {
+      kcal100: nutritionPreview.value.kcal100 || '',
+      proteines100: nutritionPreview.value.proteines100 || '',
+      glucides100: nutritionPreview.value.glucides100 || '',
+      lipides100: nutritionPreview.value.lipides100 || '',
+      nutritionSource: nutritionPreview.value.nutritionSource || '',
+    }
+    const idIngr = newId('ing')
+    await sheets.addRow('ingredients', {
+      idIngr,
+      nomIngr,
+      unite: newIngredient.unite || 'g',
+      prixUnitaire: String(newIngredient.prixUnitaire ?? 0),
+      saison: newIngredient.saison || 'toute',
+      idAllergie,
+      categorie: newIngredient.categorie || '',
+      ...nutrition,
+    })
+    addExistingIngredient({
+      idIngr,
+      nomIngr,
+      unite: newIngredient.unite || 'g',
+      idAllergie,
+      categorie: newIngredient.categorie || '',
+      ...nutrition,
+    })
+    Object.assign(newIngredient, {
+      nomIngr: '',
+      unite: 'g',
+      prixUnitaire: 0,
+      saison: 'toute',
+      idAllergie: null,
+      categorie: '',
+    })
+    nutritionPreview.value = null
+    showNewIngredient.value = false
+    toast.add({
+      severity: 'success',
+      summary: 'Ajouté au catalogue',
+      detail: `${nomIngr} · ${macrosLabel(nutrition)}`,
+      life: 2800,
+    })
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Erreur',
+      detail: err.message || 'Impossible d’enregistrer',
+      life: 3500,
+    })
+  } finally {
+    savingCatalog.value = false
+  }
 }
 
 function removeLink(idIngr) {
@@ -204,6 +416,12 @@ async function submit() {
       prixUnitaire: String(l.prixUnitaire ?? 0),
       saison: l.saison || 'toute',
       idAllergie: l.idAllergie || '',
+      kcal100: l.kcal100 || '',
+      proteines100: l.proteines100 || '',
+      glucides100: l.glucides100 || '',
+      lipides100: l.lipides100 || '',
+      nutritionSource: l.nutritionSource || '',
+      categorie: l.categorie || '',
     }))
 
   const payloadLinks = links.value.map((l) => ({
@@ -277,8 +495,14 @@ function loadRecipeForEdit(id) {
     idIngr: ing.idIngr,
     nomIngr: ing.nomIngr,
     unite: ing.unite,
+    categorie: ing.categorie || '',
     idAllergie: ing.idAllergie || '',
     nomAllergie: ing.nomAllergie || recipes.allergenName(ing.idAllergie),
+    kcal100: ing.kcal100 || '',
+    proteines100: ing.proteines100 || '',
+    glucides100: ing.glucides100 || '',
+    lipides100: ing.lipides100 || '',
+    nutritionSource: ing.nutritionSource || '',
     qteParPersonne: toNumber(ing.qteParPersonne, 1) || 1,
     isNew: false,
   }))
@@ -296,6 +520,9 @@ async function bootstrap() {
   loadingRecipe.value = true
   try {
     await sheets.ensureLoaded()
+    const next = {}
+    for (const g of recipes.catalogByCategory.slice(0, 2)) next[g.name] = true
+    openCategories.value = next
     if (isEdit.value) {
       const ok = loadRecipeForEdit(editId.value)
       if (!ok) {
@@ -396,12 +623,21 @@ onMounted(bootstrap)
           </div>
         </div>
         <div class="field">
-          <label>Allergies (recette)</label>
-          <InputText
-            v-model="form.allergie"
+          <label>Allergies (feuille allergènes)</label>
+          <MultiSelect
+            v-model="selectedRecipeAllergies"
+            :options="recipeAllergyOptions"
+            optionLabel="label"
+            optionValue="value"
+            placeholder="Choisir dans la liste…"
+            display="chip"
+            filter
+            showClear
             fluid
-            placeholder="Optionnel — sinon déduit des ingrédients"
           />
+          <p class="hint" style="margin-top: 0.35rem">
+            Complété aussi automatiquement via les allergènes des ingrédients.
+          </p>
         </div>
         <div class="field">
           <label>Image URL (optionnel)</label>
@@ -410,8 +646,37 @@ onMounted(bootstrap)
       </div>
 
       <div v-else-if="step === 1" class="form">
+        <p class="catalog-hint">
+          Catalogue ({{ catalogCount }}) — choisis par catégorie. Les quantités sont
+          <strong>par personne</strong> ; les kcal s’ajustent automatiquement (pour 100&nbsp;g de référence).
+        </p>
+
         <div class="field">
-          <label>Rechercher un ingrédient existant</label>
+          <label>Filtrer le catalogue</label>
+          <InputText v-model="catalogFilter" fluid placeholder="Ex. fromage, poulet, tomate…" />
+        </div>
+
+        <div class="nested-catalog">
+          <div v-for="group in nestedCatalog" :key="group.name" class="cat-block">
+            <button type="button" class="cat-head" @click="toggleCategory(group.name)">
+              <i class="pi" :class="openCategories[group.name] ? 'pi-chevron-down' : 'pi-chevron-right'" />
+              <span>{{ group.name }}</span>
+              <span class="cat-count">{{ group.items.length }}</span>
+            </button>
+            <ul v-show="openCategories[group.name]" class="cat-list">
+              <li v-for="ing in group.items" :key="ing.idIngr">
+                <button type="button" class="cat-item" @click="addExistingIngredient(ing)">
+                  <span class="cat-item-name">{{ ing.nomIngr }}</span>
+                  <span class="cat-item-meta">{{ ing.unite }} · {{ macrosLabel(ing) }}</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+          <p v-if="!nestedCatalog.length" class="empty-links">Aucun ingrédient trouvé.</p>
+        </div>
+
+        <div class="field" style="margin-top: 1rem">
+          <label>Recherche rapide</label>
           <AutoComplete
             v-model="ingredientQuery"
             optionLabel="nomIngr"
@@ -422,7 +687,17 @@ onMounted(bootstrap)
             fluid
             @complete="searchIngredients"
             @item-select="(e) => addExistingIngredient(e.value)"
-          />
+          >
+            <template #option="{ option }">
+              <div class="ing-option">
+                <div class="ing-option-top">
+                  <strong>{{ option.nomIngr }}</strong>
+                  <span class="ing-unit">{{ option.categorie || option.unite }}</span>
+                </div>
+                <span class="ing-macros">{{ macrosLabel(option) }}</span>
+              </div>
+            </template>
+          </AutoComplete>
         </div>
 
         <div v-if="suggestions.length" class="suggestions">
@@ -436,6 +711,9 @@ onMounted(bootstrap)
               @click="addSuggested(ing)"
             >
               {{ ing.nomIngr }}
+              <small v-if="ing.kcal100 !== '' && ing.kcal100 != null">
+                {{ Math.round(Number(ing.kcal100) || 0) }} kcal/100g
+              </small>
             </button>
           </div>
         </div>
@@ -445,8 +723,13 @@ onMounted(bootstrap)
             <div>
               <strong>{{ link.nomIngr }}</strong>
               <span class="muted">
-                {{ link.unite }}{{ link.isNew ? ' · nouveau' : '' }}
+                {{ link.unite }}
+                <template v-if="link.categorie"> · {{ link.categorie }}</template>
                 <template v-if="link.nomAllergie"> · ⚠ {{ link.nomAllergie }}</template>
+              </span>
+              <span class="ing-macros">
+                {{ formatMacros(linkMacros(link)) }}
+                <span class="muted"> / pers</span>
               </span>
             </div>
             <div class="link-actions">
@@ -454,32 +737,63 @@ onMounted(bootstrap)
                 v-model="link.qteParPersonne"
                 :min="0"
                 :minFractionDigits="0"
-                :maxFractionDigits="2"
+                :maxFractionDigits="3"
+                :step="link.unite === 'kg' || link.unite === 'l' ? 0.05 : 1"
                 placeholder="qté/pers"
                 class="qty-input"
               />
+              <span class="qty-unit">{{ link.unite }}</span>
               <Button icon="pi pi-trash" rounded text severity="danger" @click="removeLink(link.idIngr)" />
             </div>
           </div>
+          <p v-if="!links.length" class="empty-links">Aucun ingrédient pour l’instant.</p>
+        </div>
+
+        <div v-if="links.length" class="nutrition-preview recipe-macros">
+          <strong>Estimation nutrition</strong>
+          <span>
+            / pers : {{ formatMacros(recipeMacrosPreview.perPerson) }}
+          </span>
+          <span>
+            total ({{ form.nbPerso }} pers.) : {{ formatMacros(recipeMacrosPreview.total) }}
+          </span>
         </div>
 
         <Button
           v-if="!showNewIngredient"
-          label="Créer un nouvel ingrédient"
+          label="Ajouter un produit au catalogue"
           icon="pi pi-plus"
           text
           @click="showNewIngredient = true"
         />
 
         <div v-else class="new-ing">
+          <p class="hint">
+            Recherche macros (Open Food Facts) → enregistrement catalogue → ajout à la recette.
+          </p>
           <div class="grid-2">
             <div class="field">
               <label>Nom</label>
-              <InputText v-model="newIngredient.nomIngr" fluid placeholder="Ex. Farine" />
+              <InputText
+                v-model="newIngredient.nomIngr"
+                fluid
+                placeholder="Ex. Farine T55"
+                @keyup.enter="lookupCatalogNutrition"
+              />
+            </div>
+            <div class="field">
+              <label>Catégorie</label>
+              <Select
+                v-model="newIngredient.categorie"
+                :options="categorySelectOptions"
+                placeholder="Choisir…"
+                editable
+                fluid
+              />
             </div>
             <div class="field">
               <label>Unité</label>
-              <InputText v-model="newIngredient.unite" fluid placeholder="g, ml…" />
+              <InputText v-model="newIngredient.unite" fluid placeholder="g, kg, l, pièce…" />
             </div>
             <div class="field">
               <label>Prix unitaire</label>
@@ -508,9 +822,35 @@ onMounted(bootstrap)
               />
             </div>
           </div>
+
+          <div v-if="nutritionPreview?.found" class="nutrition-preview">
+            <strong>{{ nutritionPreview.productName || newIngredient.nomIngr }}</strong>
+            <span>{{ macrosLabel(nutritionPreview) }}</span>
+            <span class="muted">source : {{ nutritionPreview.nutritionSource }}</span>
+          </div>
+
           <div class="new-ing-actions">
-            <Button label="Ajouter l’ingrédient" class="cm-btn-cool" rounded @click="createIngredient" />
-            <Button label="Annuler" text severity="secondary" @click="showNewIngredient = false" />
+            <Button
+              label="Chercher les macros"
+              outlined
+              rounded
+              :loading="lookingUp"
+              @click="lookupCatalogNutrition"
+            />
+            <Button
+              label="Enregistrer et ajouter"
+              class="cm-btn-cool"
+              rounded
+              :loading="savingCatalog"
+              :disabled="!nutritionPreview?.found"
+              @click="addToCatalogAndRecipe"
+            />
+            <Button
+              label="Annuler"
+              text
+              severity="secondary"
+              @click=";(showNewIngredient = false), (nutritionPreview = null)"
+            />
           </div>
         </div>
       </div>
@@ -541,6 +881,7 @@ onMounted(bootstrap)
           <li v-for="l in links" :key="l.idIngr">
             {{ l.nomIngr }} — {{ l.qteParPersonne }} {{ l.unite }}/pers
             <span v-if="l.nomAllergie" class="muted"> ({{ l.nomAllergie }})</span>
+            <span v-if="macrosLabel(l)" class="muted"> · {{ macrosLabel(l) }}</span>
           </li>
         </ul>
         <h3>Étapes ({{ stepsList.filter((s) => s.texte.trim()).length }})</h3>
@@ -681,6 +1022,144 @@ h1 {
   padding: 0.35rem 0.75rem;
   cursor: pointer;
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.suggest small {
+  font-weight: 600;
+  color: var(--cm-muted);
+  font-size: 0.75rem;
+}
+
+.catalog-hint {
+  margin: 0 0 0.75rem;
+  color: var(--cm-muted);
+  font-size: 0.92rem;
+}
+
+.nested-catalog {
+  display: grid;
+  gap: 0.35rem;
+  max-height: 22rem;
+  overflow: auto;
+  padding: 0.35rem;
+  border: 1px solid var(--cm-border);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--cm-bg) 45%, transparent);
+}
+
+.cat-block {
+  border-bottom: 1px solid color-mix(in srgb, var(--cm-border) 70%, transparent);
+}
+
+.cat-block:last-child {
+  border-bottom: 0;
+}
+
+.cat-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  border: 0;
+  background: transparent;
+  color: var(--cm-text);
+  font-weight: 700;
+  padding: 0.55rem 0.45rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cat-count {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--cm-muted);
+  font-weight: 600;
+}
+
+.cat-list {
+  list-style: none;
+  margin: 0 0 0.45rem;
+  padding: 0 0.25rem 0.35rem 1.5rem;
+  display: grid;
+  gap: 0.2rem;
+}
+
+.cat-item {
+  width: 100%;
+  display: grid;
+  gap: 0.1rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0.4rem 0.45rem;
+  border-radius: 0.55rem;
+  cursor: pointer;
+}
+
+.cat-item:hover {
+  background: color-mix(in srgb, var(--cm-warm, #e8a87c) 12%, transparent);
+}
+
+.cat-item-name {
+  font-weight: 650;
+}
+
+.cat-item-meta {
+  font-size: 0.75rem;
+  color: var(--cm-muted);
+}
+
+.qty-unit {
+  font-size: 0.82rem;
+  color: var(--cm-muted);
+  min-width: 1.5rem;
+}
+
+.recipe-macros {
+  margin-top: 0.75rem;
+}
+
+.ing-option {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.15rem 0;
+}
+
+.ing-option-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ing-unit {
+  color: var(--cm-muted);
+  font-size: 0.85rem;
+}
+
+.ing-macros {
+  display: block;
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: var(--cm-muted);
+  font-weight: 600;
+}
+
+.empty-links {
+  margin: 0.5rem 0 0;
+  color: var(--cm-muted);
+}
+
+.nutrition-preview {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--cm-border);
+  background: color-mix(in srgb, var(--cm-bg) 50%, transparent);
 }
 
 .links {

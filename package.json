@@ -8,6 +8,7 @@
     "client": "vite",
     "server": "node server/local.js",
     "explore": "node scripts/explore-sheet.mjs",
+    "import:produits": "node scripts/import-produits.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -21,7 +22,8 @@
     "primeicons": "^8.0.0",
     "primevue": "^4.3.7",
     "vue": "^3.5.39",
-    "vue-router": "^5.2.0"
+    "vue-router": "^5.2.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@netlify/vite-plugin": "^2.7.14",

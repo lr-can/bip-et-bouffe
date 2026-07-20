@@ -64,6 +64,23 @@ export const useMenuStore = defineStore('menu', {
         this.dayRecipes(dayIndex).reduce((sum, r) => sum + (r.cout || 0), 0)
     },
 
+    dayNutrition() {
+      return (dayIndex) =>
+        this.dayRecipes(dayIndex).reduce(
+          (acc, r) => {
+            const n = r.nutrition
+            if (!n) return acc
+            return {
+              kcal: Math.round((acc.kcal + n.kcal) * 10) / 10,
+              proteines: Math.round((acc.proteines + n.proteines) * 10) / 10,
+              glucides: Math.round((acc.glucides + n.glucides) * 10) / 10,
+              lipides: Math.round((acc.lipides + n.lipides) * 10) / 10,
+            }
+          },
+          { kcal: 0, proteines: 0, glucides: 0, lipides: 0 },
+        )
+    },
+
     totalCost() {
       return this.days.reduce((sum, _, i) => sum + this.dayCost(i), 0)
     },
@@ -88,6 +105,7 @@ export const useMenuStore = defineStore('menu', {
         index: i,
         label: `Jour ${i + 1}`,
         cost: this.dayCost(i),
+        nutrition: this.dayNutrition(i),
         recipes: this.dayRecipes(i),
         filled: dayIds(day).length,
       }))

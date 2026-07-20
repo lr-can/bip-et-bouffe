@@ -23,7 +23,20 @@ export const SHEETS = {
   },
   ingredients: {
     name: 'ingredients',
-    columns: ['idIngr', 'nomIngr', 'unite', 'prixUnitaire', 'saison', 'idAllergie'],
+    columns: [
+      'idIngr',
+      'nomIngr',
+      'unite',
+      'prixUnitaire',
+      'saison',
+      'idAllergie',
+      'kcal100',
+      'proteines100',
+      'glucides100',
+      'lipides100',
+      'nutritionSource',
+      'categorie',
+    ],
     idField: 'idIngr',
   },
   allergenes: {

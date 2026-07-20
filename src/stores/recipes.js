@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { useSheetsStore } from '@/stores/sheets'
 import { fuzzyMatch, toNumber } from '@/utils/recipe'
+import { macrosForQuantity, sumMacros, isCatalogIngredient } from '@/utils/nutrition'
 
 export const useRecipesStore = defineStore('recipes', {
   getters: {
@@ -12,6 +13,38 @@ export const useRecipesStore = defineStore('recipes', {
     ingredientsMap() {
       const sheets = useSheetsStore()
       return Object.fromEntries((sheets.data.ingredients || []).map((i) => [i.idIngr, i]))
+    },
+
+    /** Catalogue utilisable pour les recettes (avec macros / catégorie). */
+    catalogIngredients() {
+      const sheets = useSheetsStore()
+      return (sheets.data.ingredients || [])
+        .filter((i) => isCatalogIngredient(i))
+        .slice()
+        .sort((a, b) =>
+          String(a.nomIngr || '').localeCompare(String(b.nomIngr || ''), 'fr'),
+        )
+    },
+
+    catalogByCategory() {
+      const groups = new Map()
+      for (const ing of this.catalogIngredients) {
+        const cat = String(ing.categorie || '').trim() || 'Autres'
+        if (!groups.has(cat)) groups.set(cat, [])
+        groups.get(cat).push(ing)
+      }
+      return [...groups.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0], 'fr'))
+        .map(([name, items]) => ({
+          name,
+          items: items.sort((a, b) =>
+            String(a.nomIngr || '').localeCompare(String(b.nomIngr || ''), 'fr'),
+          ),
+        }))
+    },
+
+    categoryOptions() {
+      return this.catalogByCategory.map((g) => g.name)
     },
 
     allergensMap() {
@@ -71,12 +104,14 @@ export const useRecipesStore = defineStore('recipes', {
           const quantite = qteParPersonne * nb
           const prixUnitaire = toNumber(base.prixUnitaire, 0)
           const nomAllergie = this.allergenName(base.idAllergie)
+          const macros = macrosForQuantity(base, quantite)
           return {
             ...base,
             nomAllergie,
             qteParPersonne,
             quantite,
             cout: quantite * prixUnitaire,
+            macros,
           }
         })
 
@@ -86,6 +121,14 @@ export const useRecipesStore = defineStore('recipes', {
           .sort((a, b) => toNumber(a.ordre, 0) - toNumber(b.ordre, 0))
 
         const cout = ingredients.reduce((sum, i) => sum + i.cout, 0)
+        const nutrition = sumMacros(ingredients.map((i) => i.macros))
+        const nutritionParPers = {
+          grams: Math.round((nutrition.grams / nb) * 10) / 10,
+          kcal: Math.round((nutrition.kcal / nb) * 10) / 10,
+          proteines: Math.round((nutrition.proteines / nb) * 10) / 10,
+          glucides: Math.round((nutrition.glucides / nb) * 10) / 10,
+          lipides: Math.round((nutrition.lipides / nb) * 10) / 10,
+        }
         const fromIngredients = [
           ...new Set(ingredients.map((i) => i.nomAllergie).filter(Boolean)),
         ]
@@ -101,6 +144,8 @@ export const useRecipesStore = defineStore('recipes', {
           ingredients,
           etapes,
           cout,
+          nutrition,
+          nutritionParPers,
           allergiesDetectees,
         }
       }
@@ -165,9 +210,9 @@ export const useRecipesStore = defineStore('recipes', {
         }
         return [...counts.entries()]
           .sort((a, b) => b[1] - a[1])
-          .slice(0, limit)
           .map(([id]) => this.ingredientsMap[id])
-          .filter(Boolean)
+          .filter((ing) => ing && isCatalogIngredient(ing))
+          .slice(0, limit)
       }
     },
 

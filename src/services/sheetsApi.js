@@ -1,9 +1,19 @@
 import axios from 'axios'
 
-// Même origine en prod (Netlify Functions sur /api/*).
-// En local, @netlify/vite-plugin expose aussi /api/* — VITE_API_URL optionnel.
+/**
+ * Toujours passer par /api/* (Netlify Functions).
+ * En local : @netlify/vite-plugin émule les functions.
+ * On ignore volontairement un VITE_API_URL vers localhost.
+ */
+function resolveBaseUrl() {
+  const raw = String(import.meta.env.VITE_API_URL || '').trim()
+  if (!raw) return ''
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/i.test(raw)) return ''
+  return raw.replace(/\/$/, '')
+}
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '',
+  baseURL: resolveBaseUrl(),
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -19,6 +29,12 @@ export const sheetsApi = {
   createRecipe: (payload) => api.post('/api/recipes', payload).then((r) => r.data),
   updateRecipe: (id, payload) => api.put(`/api/recipes/${id}`, payload).then((r) => r.data),
   deleteRecipe: (id) => api.delete(`/api/recipes/${id}`).then((r) => r.data),
+  lookupNutrition: (name) =>
+    api.post('/api/nutrition/lookup', { name }).then((r) => r.data),
+  enrichNutrition: (force = false) =>
+    api.post('/api/nutrition/enrich', { force }).then((r) => r.data),
+  importIngredients: (items, enrich = true) =>
+    api.post('/api/ingredients/import', { items, enrich }).then((r) => r.data),
 }
 
 export default api

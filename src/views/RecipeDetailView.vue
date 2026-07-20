@@ -66,7 +66,18 @@ onMounted(() => {
             <span v-if="recipe.difficulte"><i class="pi pi-bolt" /> {{ recipe.difficulte }}</span>
             <span v-if="recipe.allergie"><i class="pi pi-exclamation-triangle" /> {{ recipe.allergie }}</span>
             <span><i class="pi pi-wallet" /> {{ recipe.cout.toFixed(2) }} €</span>
+            <span v-if="recipe.nutrition?.kcal">
+              <i class="pi pi-chart-bar" />
+              {{ Math.round(recipe.nutritionParPers.kcal) }} kcal/pers
+            </span>
           </p>
+          <div v-if="recipe.nutrition?.kcal" class="macros-bar">
+            <span class="macro"><strong>{{ Math.round(recipe.nutrition.kcal) }}</strong> kcal</span>
+            <span class="macro"><strong>{{ recipe.nutrition.proteines }}</strong> g prot.</span>
+            <span class="macro"><strong>{{ recipe.nutrition.glucides }}</strong> g gluc.</span>
+            <span class="macro"><strong>{{ recipe.nutrition.lipides }}</strong> g lip.</span>
+            <span class="macro muted">total pour {{ recipe.personnes }} pers.</span>
+          </div>
         </div>
         <div class="actions">
           <div class="perso">
@@ -102,6 +113,9 @@ onMounted(() => {
               <div class="ing-main">
                 <strong>{{ ing.nomIngr }}</strong>
                 <span v-if="ing.nomAllergie" class="ing-allergy">⚠ {{ ing.nomAllergie }}</span>
+                <span v-if="ing.macros?.kcal" class="ing-macros">
+                  {{ Math.round(ing.macros.kcal) }} kcal
+                </span>
               </div>
               <span class="ing-qty">
                 {{ Number.isInteger(ing.quantite) ? ing.quantite : ing.quantite.toFixed(2) }}
@@ -182,6 +196,33 @@ h1 {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+}
+
+.macros-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1rem;
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--cm-bg) 40%, transparent);
+  border: 1px solid var(--cm-border);
+  font-size: 0.92rem;
+}
+
+.macros-bar .macro strong {
+  font-weight: 700;
+}
+
+.macros-bar .muted {
+  color: var(--cm-muted);
+  font-size: 0.82rem;
+}
+
+.ing-macros {
+  font-size: 0.78rem;
+  color: var(--cm-muted);
+  font-weight: 600;
 }
 
 .actions {
