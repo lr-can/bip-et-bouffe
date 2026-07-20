@@ -3,8 +3,10 @@
   publish = "dist"
 
 [build.environment]
-  # Ne pas scanner les fichiers .env (secrets gérés via Netlify UI / CLI)
+  # Ne pas scanner les fichiers .env locaux
   SECRETS_SCAN_OMIT_PATHS = ".env,.env.*,.env.local,.env.local.example"
+  # Ces clés ne sont pas sensibles (souvent importées avec le compte Google)
+  SECRETS_SCAN_OMIT_KEYS = "API_PORT,COOKING_SPREADSHEET_ID,GG_universe_domain,GG_type,GG_project_id,GG_client_id,GG_auth_uri,GG_token_uri,GG_auth_provider_x509_cert_url,GG_client_x509_cert_url"
 
 [functions]
   directory = "netlify/functions"

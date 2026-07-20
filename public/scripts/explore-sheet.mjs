@@ -2,7 +2,9 @@ import 'dotenv/config'
 import { google } from 'googleapis'
 import { createPrivateKey } from 'crypto'
 
-const spreadsheetId = '1L8bndWNnVsjCMKi8GxEKyXsFSfA1HANkinrtfzUqbOY'
+const spreadsheetId =
+  process.env.COOKING_SPREADSHEET_ID ||
+  '1L8bndWNnVsjCMKi8GxEKyXsFSfA1HANkinrtfzUqbOY'
 
 function normalizePrivateKey(raw) {
   if (!raw) throw new Error('GG_private_key manquante')
