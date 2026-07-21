@@ -22,6 +22,17 @@ function emptyDay() {
   }
 }
 
+function cloneDay(day) {
+  return {
+    petit_dejeuner: day?.petit_dejeuner ?? null,
+    entree: day?.entree ?? null,
+    plat: day?.plat ?? null,
+    dessert: day?.dessert ?? null,
+    diner: day?.diner ?? null,
+    extras: [...(day?.extras || [])],
+  }
+}
+
 function dayIds(day) {
   if (!day) return []
   return [
@@ -32,6 +43,10 @@ function dayIds(day) {
     day.diner,
     ...(day.extras || []),
   ].filter(Boolean)
+}
+
+function planSignature(plan) {
+  return plan.map((d) => dayIds(d).join(',')).join('|')
 }
 
 function normalize(value) {
@@ -60,8 +75,10 @@ export const useMenuStore = defineStore('menu', {
       plat: true,
       dessert: true,
     },
-    /** wizard | plan */
+    /** wizard | proposals | plan */
     phase: 'wizard',
+    /** 3 propositions générées avant validation */
+    proposals: [],
   }),
 
   getters: {
@@ -249,8 +266,19 @@ export const useMenuStore = defineStore('menu', {
       const day = this.days[dayIndex]
       if (!day) return null
 
+      const shared = new Set()
+      for (const d of this.days) {
+        for (const id of dayIds(d)) {
+          if (d === day && id === day[type]) continue
+          for (const ingId of this._ingredientIdsOf(id)) shared.add(ingId)
+        }
+      }
+
       const picked = this._pickBest(type, dayIndex, new Set(dayIds(day)), day, {
         excludeId: day[type],
+        sharedIngredients: shared,
+        overlapWeight: 8,
+        novelPenalty: 3,
       })
       if (!picked) return null
       day[type] = picked.idRecette
@@ -298,16 +326,58 @@ export const useMenuStore = defineStore('menu', {
       return list
     },
 
-    _pickBest(type, dayIndex, localUsed, currentDay, { excludeId = null } = {}) {
-      const recipes = useRecipesStore()
+    _ingredientIdsOf(recipeId) {
       const sheets = useSheetsStore()
+      return (sheets.data.ingredientsRecette || [])
+        .filter((l) => l.idRecette === recipeId)
+        .map((l) => l.idIngr)
+        .filter(Boolean)
+    },
+
+    _evaluatePlan(plan) {
+      const recipes = useRecipesStore()
+      const ids = plan.flatMap((d) => dayIds(d))
+      const enriched = ids
+        .map((id) => recipes.enriched(id, this.nbPersonnes))
+        .filter(Boolean)
+      const shopping = buildShoppingList(enriched)
+      const totalCost =
+        Math.round(enriched.reduce((sum, r) => sum + (r.cout || 0), 0) * 100) / 100
+
+      const highlights = []
+      const highlightSlots = ['plat', 'diner', 'entree', 'petit_dejeuner', 'dessert']
+      for (const day of plan) {
+        for (const slot of highlightSlots) {
+          const id = day?.[slot]
+          if (!id) continue
+          const name = recipes.byId(id)?.nomRecette
+          if (name && !highlights.includes(name)) highlights.push(name)
+          if (highlights.length >= 4) break
+        }
+        if (highlights.length >= 4) break
+      }
+
+      return {
+        ingredientCount: shopping.length,
+        totalCost,
+        highlights,
+        recipeCount: ids.length,
+        daysFilled: plan.filter((day) => dayIds(day).length > 0).length,
+      }
+    },
+
+    _pickBest(type, dayIndex, localUsed, currentDay, {
+      excludeId = null,
+      sharedIngredients = null,
+      overlapWeight = 5,
+      novelPenalty = 2,
+      costWeight = 1,
+      randomAmp = 3,
+      globalUsed = null,
+    } = {}) {
+      const recipes = useRecipesStore()
       const allOfType = this._candidatesForSlot(type)
       if (!allOfType.length) return null
-
-      const ingredientIdsOf = (recipeId) =>
-        (sheets.data.ingredientsRecette || [])
-          .filter((l) => l.idRecette === recipeId)
-          .map((l) => l.idIngr)
 
       const withoutAllergy = allOfType.filter((r) => !this._conflictsAllergy(r))
       let safe = withoutAllergy.length ? withoutAllergy : allOfType
@@ -340,8 +410,10 @@ export const useMenuStore = defineStore('menu', {
         if (matched.length) pool = matched
       }
 
+      const shared = sharedIngredients || new Set()
+
       const scoreCandidate = (recipe) => {
-        let score = 12 + Math.random() * 3
+        let score = 10 + Math.random() * randomAmp
         if (this._conflictsAllergy(recipe)) score -= 35
         if (this.mood && normalize(recipe.mood) === normalize(this.mood)) score += 8
         else if (this.mood) score -= 2
@@ -359,11 +431,27 @@ export const useMenuStore = defineStore('menu', {
           else score -= 40
         }
         if (localUsed.has(recipe.idRecette)) score -= allowReuse ? 5 : 70
+        if (globalUsed?.has(recipe.idRecette)) score -= 8
         if (excludeId && recipe.idRecette === excludeId) score -= 100
+
+        const ings = this._ingredientIdsOf(recipe.idRecette)
+        if (ings.length) {
+          let overlap = 0
+          for (const id of ings) {
+            if (shared.has(id)) overlap += 1
+          }
+          const novel = ings.length - overlap
+          score += overlap * overlapWeight
+          score -= novel * novelPenalty
+          // Bonus si presque tout est déjà dans le panier
+          if (ings.length > 0 && overlap / ings.length >= 0.5) score += 4
+        }
+
+        const cost = recipes.enriched(recipe.idRecette, this.nbPersonnes)?.cout || 0
+        score -= (cost / Math.max(1, this.nbPersonnes)) * 0.15 * costWeight
 
         if (this.budgetParJour != null && this.budgetParJour !== '') {
           const budget = toNumber(this.budgetParJour, Infinity)
-          const cost = recipes.enriched(recipe.idRecette, this.nbPersonnes)?.cout || 0
           const daySoFar = this.activeSlots.reduce((sum, t) => {
             const id = currentDay?.[t]
             if (!id) return sum
@@ -378,8 +466,8 @@ export const useMenuStore = defineStore('menu', {
         .map((r) => ({ r, score: scoreCandidate(r) }))
         .sort((a, b) => b.score - a.score)
 
-      const top = ranked.slice(0, Math.min(3, ranked.length))
-      const weights = top.map((t, i) => Math.max(1, t.score + 15) * (4 - i))
+      const top = ranked.slice(0, Math.min(4, ranked.length))
+      const weights = top.map((t, i) => Math.max(1, t.score + 20) * (5 - i))
       const total = weights.reduce((a, b) => a + b, 0) || 1
       let roll = Math.random() * total
       for (let i = 0; i < top.length; i += 1) {
@@ -389,17 +477,10 @@ export const useMenuStore = defineStore('menu', {
       return top[0]?.r || null
     },
 
-    /**
-     * Remplit tous les jours selon les repas activés.
-     */
-    generate() {
-      this.setNbJours(this.nbJours)
+    _buildPlan(strategy = {}) {
       const slots = this.activeSlots
-      if (!slots.length) {
-        return { recipes: 0, daysFilled: 0, daysRequested: this.nbJours }
-      }
-
-      const usedRecipes = new Set()
+      const shared = new Set()
+      const globalUsed = new Set()
       const plan = []
 
       for (let d = 0; d < this.nbJours; d += 1) {
@@ -407,25 +488,150 @@ export const useMenuStore = defineStore('menu', {
         const localUsed = new Set()
 
         for (const type of slots) {
-          const picked = this._pickBest(type, d, localUsed, day)
+          const picked = this._pickBest(type, d, localUsed, day, {
+            sharedIngredients: shared,
+            overlapWeight: strategy.overlapWeight ?? 5,
+            novelPenalty: strategy.novelPenalty ?? 2,
+            costWeight: strategy.costWeight ?? 1,
+            randomAmp: strategy.randomAmp ?? 3,
+            globalUsed,
+          })
           if (picked) {
             day[type] = picked.idRecette
             localUsed.add(picked.idRecette)
-            usedRecipes.add(picked.idRecette)
+            globalUsed.add(picked.idRecette)
+            for (const id of this._ingredientIdsOf(picked.idRecette)) shared.add(id)
           }
         }
 
         plan.push(day)
       }
 
-      this.days = plan
+      return plan
+    },
+
+    /**
+     * Génère 3 propositions de planning (optimisées sur le panier).
+     */
+    generateProposals() {
+      this.setNbJours(this.nbJours)
+      const slots = this.activeSlots
+      if (!slots.length) {
+        this.proposals = []
+        return { count: 0, recipes: 0, daysFilled: 0, daysRequested: this.nbJours }
+      }
+
+      const strategies = [
+        {
+          id: 'compact',
+          label: 'Panier compact',
+          blurb: 'Le moins d’ingrédients possible',
+          overlapWeight: 12,
+          novelPenalty: 5,
+          costWeight: 0.6,
+          randomAmp: 1.2,
+        },
+        {
+          id: 'balanced',
+          label: 'Équilibré',
+          blurb: 'Bon compromis panier / variété',
+          overlapWeight: 6,
+          novelPenalty: 2.2,
+          costWeight: 1.1,
+          randomAmp: 2.8,
+        },
+        {
+          id: 'varied',
+          label: 'Plus de variété',
+          blurb: 'Plus de plats différents',
+          overlapWeight: 2,
+          novelPenalty: 0.4,
+          costWeight: 1.4,
+          randomAmp: 4.5,
+        },
+      ]
+
+      const proposals = []
+      const seen = new Set()
+
+      for (const strat of strategies) {
+        let best = null
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const plan = this._buildPlan(strat)
+          const sig = planSignature(plan)
+          if (seen.has(sig) && attempt < 4) continue
+          const stats = this._evaluatePlan(plan)
+          if (!stats.recipeCount) continue
+
+          const better =
+            !best ||
+            stats.ingredientCount < best.stats.ingredientCount ||
+            (stats.ingredientCount === best.stats.ingredientCount &&
+              stats.totalCost < best.stats.totalCost)
+
+          // Pour « variété », on accepte aussi un panier un peu plus large s’il a plus de recettes uniques
+          const preferVaried =
+            strat.id === 'varied' &&
+            best &&
+            stats.recipeCount >= best.stats.recipeCount &&
+            stats.ingredientCount <= best.stats.ingredientCount + 3
+
+          if (better || preferVaried || !best) {
+            best = { plan, stats, sig }
+            if (strat.id !== 'varied' && better) {
+              /* keep searching for even fewer ingredients */
+            }
+          }
+        }
+
+        if (best) {
+          seen.add(best.sig)
+          proposals.push({
+            id: strat.id,
+            label: strat.label,
+            blurb: strat.blurb,
+            days: best.plan.map(cloneDay),
+            ...best.stats,
+          })
+        }
+      }
+
+      this.proposals = proposals
+      this.phase = proposals.length ? 'proposals' : 'wizard'
+      return {
+        count: proposals.length,
+        recipes: proposals[0]?.recipeCount || 0,
+        daysFilled: proposals[0]?.daysFilled || 0,
+        daysRequested: this.nbJours,
+      }
+    },
+
+    selectProposal(proposalOrId) {
+      const proposal =
+        typeof proposalOrId === 'string'
+          ? this.proposals.find((p) => p.id === proposalOrId)
+          : proposalOrId
+      if (!proposal?.days?.length) return false
+      this.days = proposal.days.map(cloneDay)
       this.activeDay = 0
       this.phase = 'plan'
+      this.proposals = []
+      return true
+    },
 
-      const daysFilled = plan.filter((day) => dayIds(day).length > 0).length
+    /**
+     * Remplit tous les jours (compat) — délègue aux propositions puis prend la + compacte.
+     */
+    generate() {
+      const result = this.generateProposals()
+      if (!result.count) return result
+      const best = [...this.proposals].sort(
+        (a, b) => a.ingredientCount - b.ingredientCount || a.totalCost - b.totalCost,
+      )[0]
+      this.selectProposal(best)
       return {
         recipes: this.allSelectedIds.length,
-        daysFilled,
+        daysFilled: this.days.filter((day) => dayIds(day).length > 0).length,
         daysRequested: this.nbJours,
       }
     },

@@ -41,7 +41,8 @@ const genPhraseIndex = ref(0)
 const rerolling = ref(null)
 const wizardStep = ref(0)
 const stepAnimKey = ref(0)
-const phraseIndex = ref(0)
+const phrasePick = ref(0)
+const wordsReady = ref(0)
 const mealRowEls = ref([])
 
 const WIZARD_STEPS = [
@@ -133,30 +134,66 @@ const wizardProgress = computed(() => ((wizardStep.value + 1) / WIZARD_STEPS.len
 
 const liveTitle = computed(() => {
   const titles = currentWizard.value?.titles || ['']
-  return titles[phraseIndex.value % titles.length]
+  return titles[phrasePick.value % titles.length]
 })
 const liveHint = computed(() => {
   const hints = currentWizard.value?.hints || ['']
-  return hints[phraseIndex.value % hints.length]
+  return hints[phrasePick.value % hints.length]
 })
+const titleWords = computed(() =>
+  String(liveTitle.value || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean),
+)
+const hintWords = computed(() =>
+  String(liveHint.value || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean),
+)
 const liveGenPhrase = computed(() => GEN_PHRASES[genPhraseIndex.value % GEN_PHRASES.length])
 
-let phraseTimer = null
+let wordTimer = null
 let genPhraseTimer = null
 
-function startPhraseCycle() {
-  stopPhraseCycle()
-  phraseIndex.value = 0
-  phraseTimer = window.setInterval(() => {
-    phraseIndex.value += 1
-  }, 4200)
+function stopWordReveal() {
+  if (wordTimer) {
+    clearInterval(wordTimer)
+    wordTimer = null
+  }
 }
 
-function stopPhraseCycle() {
-  if (phraseTimer) {
-    clearInterval(phraseTimer)
-    phraseTimer = null
-  }
+function startWordReveal() {
+  stopWordReveal()
+  wordsReady.value = 0
+  const total = titleWords.value.length + hintWords.value.length
+  if (!total) return
+  wordTimer = window.setInterval(() => {
+    if (wordsReady.value >= total) {
+      stopWordReveal()
+      return
+    }
+    wordsReady.value += 1
+  }, 48)
+}
+
+/** Tire une formulation au hasard pour l’étape courante (pas de rotation). */
+function pickStepPhrase() {
+  stopWordReveal()
+  const titles = currentWizard.value?.titles || ['']
+  phrasePick.value = Math.floor(Math.random() * Math.max(1, titles.length))
+  wordsReady.value = 0
+  // Laisse le DOM peindre la carte, puis révèle mot à mot
+  window.setTimeout(startWordReveal, 40)
+}
+
+function titleWordVisible(index) {
+  return wordsReady.value > index
+}
+
+function hintWordVisible(index) {
+  return wordsReady.value > titleWords.value.length + index
 }
 
 const { refresh: refreshReveal } = useScrollReveal(mealRowEls, {
@@ -224,7 +261,7 @@ function goWizard(delta) {
   if (next < 0 || next >= WIZARD_STEPS.length) return
   wizardStep.value = next
   stepAnimKey.value += 1
-  startPhraseCycle()
+  pickStepPhrase()
 }
 
 function openReplace(type) {
@@ -254,14 +291,14 @@ function confirmPick() {
 async function generate() {
   generating.value = true
   genPhraseIndex.value = 0
-  stopPhraseCycle()
+  stopWordReveal()
   if (genPhraseTimer) clearInterval(genPhraseTimer)
   genPhraseTimer = window.setInterval(() => {
     genPhraseIndex.value += 1
   }, 700)
 
   await new Promise((r) => setTimeout(r, 2800))
-  const result = menu.generate()
+  const result = menu.generateProposals()
 
   if (genPhraseTimer) {
     clearInterval(genPhraseTimer)
@@ -269,9 +306,9 @@ async function generate() {
   }
   await new Promise((r) => setTimeout(r, 450))
   generating.value = false
-  if (menu.phase === 'wizard') startPhraseCycle()
+  if (menu.phase === 'wizard') pickStepPhrase()
 
-  if (!result.recipes) {
+  if (!result.count) {
     toast.add({
       severity: 'warn',
       summary: 'Pas assez de recettes',
@@ -281,21 +318,22 @@ async function generate() {
     return
   }
 
-  if (result.daysFilled < result.daysRequested) {
-    toast.add({
-      severity: 'warn',
-      summary: 'Planning partiel',
-      detail: `${result.daysFilled}/${result.daysRequested} jour(s) remplis — complète le carnet.`,
-      life: 4200,
-    })
-  } else {
-    toast.add({
-      severity: 'success',
-      summary: 'Planning prêt',
-      detail: `${result.daysRequested} jour(s) · ${result.recipes} repas`,
-      life: 3200,
-    })
-  }
+  toast.add({
+    severity: 'success',
+    summary: '3 propositions prêtes',
+    detail: 'Choisis celle qui allège le mieux ton panier.',
+    life: 3200,
+  })
+}
+
+function chooseProposal(proposal) {
+  if (!menu.selectProposal(proposal)) return
+  toast.add({
+    severity: 'success',
+    summary: proposal.label,
+    detail: `${proposal.ingredientCount} ingrédients · ${proposal.totalCost.toFixed(2)} €`,
+    life: 2800,
+  })
 }
 
 async function rollDice(type) {
@@ -354,20 +392,21 @@ function slotRecipe(type) {
 
 function backToWizard() {
   menu.setPhase('wizard')
+  menu.proposals = []
   wizardStep.value = 0
   stepAnimKey.value += 1
-  startPhraseCycle()
+  pickStepPhrase()
 }
 
 onMounted(() => {
   sheets.ensureLoaded().catch(() => {})
   menu.setNbJours(menu.nbJours)
   refreshReveal()
-  if (menu.phase === 'wizard') startPhraseCycle()
+  if (menu.phase === 'wizard') pickStepPhrase()
 })
 
 onUnmounted(() => {
-  stopPhraseCycle()
+  stopWordReveal()
   if (genPhraseTimer) clearInterval(genPhraseTimer)
 })
 </script>
@@ -379,17 +418,27 @@ onUnmounted(() => {
         <p class="eyebrow">Planning entre amis</p>
         <h1 class="cm-display">
           <span class="cm-grad-text">
-            {{ menu.phase === 'wizard' ? 'Compose ton menu' : `Menus sur ${menu.nbJours} jour${menu.nbJours > 1 ? 's' : ''}` }}
+            {{
+              menu.phase === 'wizard'
+                ? 'Compose ton menu'
+                : menu.phase === 'proposals'
+                  ? 'Choisis ton planning'
+                  : `Menus sur ${menu.nbJours} jour${menu.nbJours > 1 ? 's' : ''}`
+            }}
           </span>
         </h1>
         <p class="lede">
-          {{ menu.phase === 'wizard'
-            ? 'Réponds aux questions, on s’occupe du reste.'
-            : 'Relance un repas au hasard, remplace une idée, ou repars du questionnaire.' }}
+          {{
+            menu.phase === 'wizard'
+              ? 'Réponds aux questions, on s’occupe du reste.'
+              : menu.phase === 'proposals'
+                ? 'Trois options optimisées pour alléger la liste de courses.'
+                : 'Relance un repas au hasard, remplace une idée, ou repars du questionnaire.'
+          }}
         </p>
       </div>
       <Button
-        v-if="menu.phase === 'plan'"
+        v-if="menu.phase === 'plan' || menu.phase === 'proposals'"
         label="Nouveau questionnaire"
         icon="pi pi-replay"
         outlined
@@ -418,33 +467,39 @@ onUnmounted(() => {
             type="button"
             class="wiz-dot"
             :class="{ active: i === wizardStep, done: i < wizardStep }"
-            :aria-label="step.title"
-            @click="wizardStep = i; stepAnimKey += 1; startPhraseCycle()"
+            :aria-label="step.titles?.[0] || step.id"
+            @click="wizardStep = i; stepAnimKey += 1; pickStepPhrase()"
           />
         </div>
 
         <Transition name="wiz-slide" mode="out-in">
-          <div :key="stepAnimKey" class="wizard-card breathe">
+          <div :key="stepAnimKey" class="wizard-card">
             <p class="wiz-kicker">Étape {{ wizardStep + 1 }} / {{ WIZARD_STEPS.length }}</p>
             <div class="wiz-copy">
-              <Transition name="phrase-fade" mode="out-in">
-                <h2 :key="`${wizardStep}-${phraseIndex}-t`" class="cm-display wiz-title">
-                  {{ liveTitle }}
-                </h2>
-              </Transition>
-              <Transition name="phrase-fade" mode="out-in">
-                <p :key="`${wizardStep}-${phraseIndex}-h`" class="wiz-hint">
-                  {{ liveHint }}
-                </p>
-              </Transition>
+              <h2 class="cm-display wiz-title" :aria-label="liveTitle">
+                <span
+                  v-for="(word, i) in titleWords"
+                  :key="`${stepAnimKey}-t-${i}`"
+                  class="wiz-word"
+                  :class="{ on: titleWordVisible(i) }"
+                >{{ word }}</span>
+              </h2>
+              <p class="wiz-hint" :aria-label="liveHint">
+                <span
+                  v-for="(word, i) in hintWords"
+                  :key="`${stepAnimKey}-h-${i}`"
+                  class="wiz-word wiz-word--hint"
+                  :class="{ on: hintWordVisible(i) }"
+                >{{ word }}</span>
+              </p>
             </div>
 
-            <div v-if="currentWizard.id === 'personnes'" class="wiz-answer big-number">
+            <div v-if="currentWizard.id === 'personnes'" class="wiz-answer big-number wiz-answer-anim">
               <InputNumber v-model="menu.nbPersonnes" :min="1" :max="30" showButtons />
               <span class="wiz-unit">personne{{ menu.nbPersonnes > 1 ? 's' : '' }}</span>
             </div>
 
-            <div v-else-if="currentWizard.id === 'jours'" class="wiz-answer big-number">
+            <div v-else-if="currentWizard.id === 'jours'" class="wiz-answer big-number wiz-answer-anim">
               <InputNumber v-model="menu.nbJours" :min="1" :max="14" showButtons />
               <span class="wiz-unit">jour{{ menu.nbJours > 1 ? 's' : '' }}</span>
             </div>
@@ -452,26 +507,28 @@ onUnmounted(() => {
             <div v-else-if="currentWizard.id === 'repas'" class="wiz-answer meal-picks">
               <button
                 type="button"
-                class="meal-toggle"
+                class="meal-toggle wiz-pop"
+                style="--pop-delay: 0.05s"
                 :class="{ on: menu.includePetitDejeuner }"
                 @click="menu.includePetitDejeuner = !menu.includePetitDejeuner"
               >
-                <i class="pi pi-sun" />
+                <i class="pi pi-sun wiz-icon" />
                 <span>Petit-déjeuner</span>
               </button>
 
-              <div class="lunch-block">
+              <div class="lunch-block wiz-pop" style="--pop-delay: 0.12s">
                 <p class="lunch-label">Déjeuner</p>
                 <div class="lunch-toggles">
                   <button
-                    v-for="course in LUNCH_COURSE_TYPES"
+                    v-for="(course, ci) in LUNCH_COURSE_TYPES"
                     :key="course"
                     type="button"
-                    class="meal-toggle"
+                    class="meal-toggle wiz-pop"
+                    :style="{ '--pop-delay': `${0.16 + ci * 0.06}s` }"
                     :class="{ on: menu.includeCourses[course] }"
                     @click="menu.toggleCourse(course)"
                   >
-                    <i class="pi" :class="SLOT_META[course].icon" />
+                    <i class="pi wiz-icon" :class="SLOT_META[course].icon" />
                     <span>{{ SLOT_META[course].label }}</span>
                   </button>
                 </div>
@@ -479,16 +536,17 @@ onUnmounted(() => {
 
               <button
                 type="button"
-                class="meal-toggle"
+                class="meal-toggle wiz-pop"
+                style="--pop-delay: 0.36s"
                 :class="{ on: menu.includeDiner }"
                 @click="menu.includeDiner = !menu.includeDiner"
               >
-                <i class="pi pi-moon" />
+                <i class="pi pi-moon wiz-icon" />
                 <span>Dîner</span>
               </button>
             </div>
 
-            <div v-else-if="currentWizard.id === 'ambiance'" class="wiz-answer">
+            <div v-else-if="currentWizard.id === 'ambiance'" class="wiz-answer wiz-answer-anim">
               <Select
                 v-model="menu.mood"
                 :options="moodOptions"
@@ -503,21 +561,23 @@ onUnmounted(() => {
               <div class="spice-wizard">
                 <button
                   type="button"
-                  class="spice-wiz-btn"
+                  class="spice-wiz-btn wiz-pop"
+                  style="--pop-delay: 0.04s"
                   :class="{ on: menu.maxSpice === null }"
                   @click="menu.maxSpice = null"
                 >
                   Pas de limite
                 </button>
                 <button
-                  v-for="opt in SPICE_LEVELS"
+                  v-for="(opt, oi) in SPICE_LEVELS"
                   :key="opt.value"
                   type="button"
-                  class="spice-wiz-btn"
+                  class="spice-wiz-btn wiz-pop"
+                  :style="{ '--pop-delay': `${0.1 + oi * 0.05}s` }"
                   :class="{ on: menu.maxSpice === opt.value }"
                   @click="menu.maxSpice = opt.value"
                 >
-                  <SpicePeppers :level="opt.value" />
+                  <SpicePeppers class="wiz-icon" :level="opt.value" />
                   <span>{{ opt.label }}</span>
                 </button>
               </div>
@@ -527,7 +587,8 @@ onUnmounted(() => {
               <div class="diet-wizard">
                 <button
                   type="button"
-                  class="diet-wiz-btn"
+                  class="diet-wiz-btn wiz-pop"
+                  style="--pop-delay: 0.04s"
                   :class="{ on: menu.diet === '' }"
                   @click="menu.diet = ''"
                 >
@@ -535,7 +596,8 @@ onUnmounted(() => {
                 </button>
                 <button
                   type="button"
-                  class="diet-wiz-btn"
+                  class="diet-wiz-btn wiz-pop"
+                  style="--pop-delay: 0.1s"
                   :class="{ on: menu.diet === 'vegetarien' }"
                   @click="menu.diet = 'vegetarien'"
                 >
@@ -543,7 +605,8 @@ onUnmounted(() => {
                 </button>
                 <button
                   type="button"
-                  class="diet-wiz-btn"
+                  class="diet-wiz-btn wiz-pop"
+                  style="--pop-delay: 0.16s"
                   :class="{ on: menu.diet === 'vegan' }"
                   @click="menu.diet = 'vegan'"
                 >
@@ -552,7 +615,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div v-else-if="currentWizard.id === 'allergies'" class="wiz-answer">
+            <div v-else-if="currentWizard.id === 'allergies'" class="wiz-answer wiz-answer-anim">
               <MultiSelect
                 v-model="selectedAllergies"
                 :options="allergyAvoidOptions"
@@ -565,7 +628,8 @@ onUnmounted(() => {
               />
             </div>
 
-            <div v-else-if="currentWizard.id === 'budget'" class="wiz-answer big-number">
+            <div v-else-if="currentWizard.id === 'budget'" class="wiz-answer big-number wiz-answer-anim">
+
               <InputNumber
                 v-model="menu.budgetParJour"
                 :min="0"
@@ -611,7 +675,74 @@ onUnmounted(() => {
       </div>
     </template>
 
-    <template v-else>
+    <template v-else-if="menu.phase === 'proposals'">
+      <div class="proposals cm-rise">
+        <header class="proposals-head">
+          <div>
+            <p class="eyebrow">Optimisé courses</p>
+            <h2 class="cm-display">Trois plannings, un panier plus léger</h2>
+            <p class="lede">
+              On favorise le partage d’ingrédients entre les repas. Compare le nombre d’articles et le prix estimé.
+            </p>
+          </div>
+          <Button
+            label="Relancer"
+            icon="pi pi-bolt"
+            class="cm-btn-warm"
+            rounded
+            :loading="generating"
+            @click="generate"
+          />
+        </header>
+
+        <div class="proposal-grid">
+          <article
+            v-for="(proposal, i) in menu.proposals"
+            :key="proposal.id"
+            class="proposal-card cm-rise"
+            :class="`cm-rise-delay-${(i % 3) + 1}`"
+          >
+            <div class="proposal-top">
+              <span class="proposal-badge" :class="`tone-${proposal.id}`">{{ proposal.label }}</span>
+              <span class="proposal-blurb">{{ proposal.blurb }}</span>
+            </div>
+
+            <div class="proposal-stats">
+              <div class="proposal-stat">
+                <span class="proposal-stat-label">Ingrédients</span>
+                <strong>{{ proposal.ingredientCount }}</strong>
+              </div>
+              <div class="proposal-stat">
+                <span class="proposal-stat-label">Prix estimé</span>
+                <strong>{{ proposal.totalCost.toFixed(2) }} €</strong>
+              </div>
+              <div class="proposal-stat">
+                <span class="proposal-stat-label">Repas</span>
+                <strong>{{ proposal.recipeCount }}</strong>
+              </div>
+            </div>
+
+            <div v-if="proposal.highlights?.length" class="proposal-highlights">
+              <p class="proposal-highlights-label">Plats phares</p>
+              <ul>
+                <li v-for="name in proposal.highlights" :key="name">{{ name }}</li>
+              </ul>
+            </div>
+
+            <Button
+              label="Choisir ce planning"
+              icon="pi pi-check"
+              class="cm-btn-cool"
+              rounded
+              fluid
+              @click="chooseProposal(proposal)"
+            />
+          </article>
+        </div>
+      </div>
+    </template>
+
+    <template v-else-if="menu.phase === 'plan'">
       <div class="day-rail cm-rise" role="tablist" aria-label="Jours du planning">
         <button
           v-for="(day, i) in menu.planSummary"
@@ -648,7 +779,7 @@ onUnmounted(() => {
           <div class="day-panel-actions">
             <Button icon="pi pi-trash" rounded text severity="secondary" aria-label="Vider le jour" @click="menu.clearDay()" />
             <Button label="Ajouter" icon="pi pi-plus" rounded outlined @click="openAddExtra" />
-            <Button label="Régénérer" icon="pi pi-bolt" class="cm-btn-warm" rounded @click="generate" :loading="generating" />
+            <Button label="Autres propositions" icon="pi pi-bolt" class="cm-btn-warm" rounded @click="generate" :loading="generating" />
           </div>
         </div>
 
@@ -958,10 +1089,6 @@ h1 {
   gap: 0.55rem;
 }
 
-.wizard-card.breathe {
-  animation: wiz-breathe 5.2s ease-in-out infinite;
-}
-
 .wiz-copy {
   display: grid;
   gap: 0.45rem;
@@ -980,37 +1107,80 @@ h1 {
 .wiz-title {
   margin: 0;
   font-size: clamp(1.6rem, 3.5vw, 2.2rem);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem 0.38rem;
 }
 
 .wiz-hint {
   margin: 0 0 0.75rem;
   color: var(--cm-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.3rem;
+  min-height: 1.4em;
 }
 
-.phrase-fade-enter-active,
-.phrase-fade-leave-active {
-  transition: opacity 0.55s ease, transform 0.55s ease;
-}
-
-.phrase-fade-enter-from {
+.wiz-word {
+  display: inline-block;
   opacity: 0;
-  transform: translateY(8px);
+  transform: translateY(0.45em) scale(0.96);
+  filter: blur(3px);
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s cubic-bezier(0.22, 1, 0.36, 1),
+    filter 0.22s ease;
 }
 
-.phrase-fade-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
+.wiz-word.on {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
 }
 
-@keyframes wiz-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    box-shadow: 0 10px 28px color-mix(in srgb, var(--cm-glow, rgba(255, 107, 53, 0.18)) 55%, transparent);
+.wiz-word--hint {
+  font-weight: 500;
+}
+
+.wiz-pop {
+  animation: wiz-pop-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--pop-delay, 0.08s);
+}
+
+.wiz-answer-anim {
+  animation: wiz-pop-in 0.34s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: 0.12s;
+}
+
+.wiz-icon {
+  display: inline-flex;
+  animation: wiz-icon-pop 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--pop-delay, 0.08s) + 0.04s);
+}
+
+@keyframes wiz-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
   }
-  50% {
-    transform: scale(1.012);
-    box-shadow: 0 16px 40px color-mix(in srgb, var(--cm-glow, rgba(255, 107, 53, 0.28)) 80%, transparent);
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wiz-icon-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-12deg);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.12) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
   }
 }
 
@@ -1135,19 +1305,152 @@ h1 {
   gap: 0.75rem;
 }
 
+.proposals {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.proposals-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.proposals-head h2 {
+  margin: 0.15rem 0 0.35rem;
+  font-size: clamp(1.55rem, 3.2vw, 2.15rem);
+}
+
+.proposal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.9rem;
+}
+
+.proposal-card {
+  display: grid;
+  gap: 0.9rem;
+  align-content: start;
+  padding: 1.15rem 1.1rem 1.2rem;
+  border-radius: 1.25rem;
+  border: 1px solid var(--cm-border);
+  background:
+    linear-gradient(165deg, color-mix(in srgb, var(--cm-orange) 7%, transparent), transparent 40%),
+    var(--cm-surface);
+}
+
+.proposal-top {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.proposal-badge {
+  display: inline-flex;
+  width: fit-content;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 750;
+  color: #fff;
+  background: var(--cm-grad-warm);
+}
+
+.proposal-badge.tone-compact {
+  background: linear-gradient(120deg, #0d9488, #14b8a6);
+}
+
+.proposal-badge.tone-balanced {
+  background: var(--cm-grad-warm);
+}
+
+.proposal-badge.tone-varied {
+  background: linear-gradient(120deg, #6366f1, #a78bfa);
+}
+
+.proposal-blurb {
+  color: var(--cm-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.proposal-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.proposal-stat {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0.45rem;
+  border-radius: 0.85rem;
+  background: color-mix(in srgb, var(--cm-bg) 55%, transparent);
+  text-align: center;
+}
+
+.proposal-stat-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cm-muted);
+}
+
+.proposal-stat strong {
+  font-size: 1.05rem;
+  font-family: var(--font-display);
+}
+
+.proposal-highlights-label {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cm-muted);
+}
+
+.proposal-highlights ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.proposal-highlights li {
+  font-size: 0.92rem;
+  font-weight: 650;
+  padding-left: 0.7rem;
+  position: relative;
+}
+
+.proposal-highlights li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 999px;
+  background: var(--cm-orange, #ff6b35);
+}
+
 .wiz-slide-enter-active,
 .wiz-slide-leave-active {
-  transition: opacity 0.28s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.16s ease, transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .wiz-slide-enter-from {
   opacity: 0;
-  transform: translateX(18px);
+  transform: translateX(10px);
 }
 
 .wiz-slide-leave-to {
   opacity: 0;
-  transform: translateX(-14px);
+  transform: translateX(-8px);
 }
 
 /* —— Plan —— */
@@ -1543,6 +1846,16 @@ h1 {
   animation: wiz-breathe 2.4s ease-in-out infinite;
 }
 
+@keyframes wiz-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.06);
+  }
+}
+
 .gen-phrase {
   position: relative;
   z-index: 1;
@@ -1599,6 +1912,10 @@ h1 {
     flex-direction: row;
     justify-content: flex-end;
   }
+
+  .proposal-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1609,11 +1926,20 @@ h1 {
   .gen-fade-enter-active,
   .gen-fade-leave-active,
   .dice-btn:active,
-  .wizard-card.breathe,
   .breathe-strong,
-  .gen-orb {
-    transition: none;
-    animation: none;
+  .gen-orb,
+  .wiz-pop,
+  .wiz-answer-anim,
+  .wiz-icon,
+  .wiz-word {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .wiz-word {
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }
 </style>
