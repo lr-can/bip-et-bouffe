@@ -92,19 +92,28 @@ function round1(n) {
   return Math.round(Number(n) * 10) / 10
 }
 
+/** Précision plus fine pour les conversions d'unités (évite 250g → 0.3 kg). */
+function roundQty(n) {
+  const x = Number(n)
+  if (!Number.isFinite(x)) return 0
+  if (Math.abs(x) >= 100) return Math.round(x * 10) / 10
+  if (Math.abs(x) >= 1) return Math.round(x * 100) / 100
+  return Math.round(x * 10000) / 10000
+}
+
 function gramsToQuantity(grams, unite, nomIngr = '') {
   const u = normalizeUnit(unite)
-  if (!u || /^(g|gr|gramme|grammes)$/.test(u)) return round1(grams)
-  if (/^(kg|kilo)/.test(u)) return round1(grams / 1000)
-  if (/^mg/.test(u)) return round1(grams * 1000)
-  if (/^(ml|millilitre)/.test(u)) return round1(grams)
-  if (/^(cl|centilitre)/.test(u)) return round1(grams / 10)
-  if (/^(l|litre)$/.test(u)) return round1(grams / 1000)
-  if (/^(c\.?a\.?s|cas|cuillere.?a.?soupe)/.test(u)) return round1(grams / 15)
-  if (/^(c\.?a\.?c|cac|cuillere.?a.?cafe)/.test(u)) return round1(grams / 5)
+  if (!u || /^(g|gr|gramme|grammes)$/.test(u)) return roundQty(grams)
+  if (/^(kg|kilo)/.test(u)) return roundQty(grams / 1000)
+  if (/^mg/.test(u)) return roundQty(grams * 1000)
+  if (/^(ml|millilitre)/.test(u)) return roundQty(grams)
+  if (/^(cl|centilitre)/.test(u)) return roundQty(grams / 10)
+  if (/^(l|litre)$/.test(u)) return roundQty(grams / 1000)
+  if (/^(c\.?a\.?s|cas|cuillere.?a.?soupe)/.test(u)) return roundQty(grams / 15)
+  if (/^(c\.?a\.?c|cac|cuillere.?a.?cafe)/.test(u)) return roundQty(grams / 5)
   if (/^(pce|pcs|piece|pi[eè]ce|unit[eé])/.test(u)) {
     const piece = pieceWeightGrams(nomIngr)
-    return piece ? round1(grams / piece) : null
+    return piece ? roundQty(grams / piece) : null
   }
   return null
 }
@@ -182,23 +191,38 @@ export function defaultRecipeQty(unite, nomIngr = '') {
 export function convertQty(qty, fromUnit, toUnit, nomIngr = '') {
   const from = canonicalUnit(fromUnit)
   const to = canonicalUnit(toUnit)
-  if (from === to) return round1(toNumber(qty, 0))
+  if (from === to) return roundQty(toNumber(qty, 0))
   const fromG = quantityToGrams(qty, from, nomIngr)
   return gramsToQuantity(fromG, to, nomIngr)
 }
 
 /**
- * Coût d'une quantité : le prix catalogue est toujours pour `ingredient.unite`.
- * On convertit la quantité de la recette vers cette unité avant de multiplier.
+ * Coût d'une quantité.
+ * Le prix catalogue est pour 1× `ingredient.unite` (ex. 1 kg, 1 L, 1 pièce).
+ * On convertit via les grammes pour éviter les erreurs d'arrondi (250 g ≠ 0,3 kg).
  */
 export function costForQuantity(ingredient, quantite, uniteRecette = null) {
   const prix = toNumber(ingredient?.prixUnitaire, 0)
   if (!prix) return 0
+
   const catalogUnit = canonicalUnit(ingredient?.unite || 'g')
   const recipeUnit = canonicalUnit(uniteRecette || catalogUnit)
-  const qtyCatalog = convertQty(quantite, recipeUnit, catalogUnit, ingredient?.nomIngr)
-  if (qtyCatalog === null) return round1(toNumber(quantite, 0) * prix)
-  return Math.round(qtyCatalog * prix * 100) / 100
+  const nom = ingredient?.nomIngr || ''
+
+  const gramsUsed = quantityToGrams(quantite, recipeUnit, nom)
+  if (!gramsUsed) return 0
+
+  const gramsPerCatalogUnit = quantityToGrams(1, catalogUnit, nom)
+  if (!gramsPerCatalogUnit) {
+    // Fallback si l'unité catalogue n'est pas convertible
+    if (catalogUnit === recipeUnit) {
+      return Math.round(toNumber(quantite, 0) * prix * 100) / 100
+    }
+    return 0
+  }
+
+  const qtyInCatalogUnits = gramsUsed / gramsPerCatalogUnit
+  return Math.round(qtyInCatalogUnits * prix * 100) / 100
 }
 
 export function isCatalogIngredient(ing) {
