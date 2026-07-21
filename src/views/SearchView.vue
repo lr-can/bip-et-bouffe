@@ -10,8 +10,9 @@ import Message from 'primevue/message'
 import Dialog from 'primevue/dialog'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
-import { pickRandom, fuzzyMatch } from '@/utils/recipe'
+import { pickRandom, fuzzyMatch, SPICE_LEVELS } from '@/utils/recipe'
 import RecipeCard from '@/components/RecipeCard.vue'
+import SpicePeppers from '@/components/SpicePeppers.vue'
 
 const sheets = useSheetsStore()
 const recipes = useRecipesStore()
@@ -24,12 +25,17 @@ const ingredientSuggestions = ref([])
 const spinning = ref(false)
 const rouletteOpen = ref(false)
 const rouletteName = ref('')
+const dietFilter = ref('') // '' | vegetarien | vegan
+const maxSpice = ref(null) // null = tous, 0-3
 
 const results = computed(() =>
   recipes.search({
     mood: mood.value,
     ingredientId: ingredient.value?.idIngr || '',
     query: query.value,
+    vegan: dietFilter.value === 'vegan',
+    vegetarien: dietFilter.value === 'vegetarien',
+    maxSpice: maxSpice.value,
   }),
 )
 
@@ -44,10 +50,20 @@ function toggleMood(value) {
   mood.value = mood.value === value ? '' : value
 }
 
+function toggleDiet(value) {
+  dietFilter.value = dietFilter.value === value ? '' : value
+}
+
+function toggleMaxSpice(value) {
+  maxSpice.value = maxSpice.value === value ? null : value
+}
+
 function clearFilters() {
   mood.value = ''
   query.value = ''
   ingredient.value = null
+  dietFilter.value = ''
+  maxSpice.value = null
 }
 
 async function spinRoulette() {
@@ -120,6 +136,36 @@ onMounted(() => {
         />
       </div>
       <Button label="Réinitialiser" text severity="secondary" @click="clearFilters" />
+    </div>
+
+    <div class="extra-filters cm-rise cm-rise-delay-2">
+      <div class="filter-group">
+        <span class="filter-label">Régime</span>
+        <Chip
+          label="Végétarien"
+          :class="{ active: dietFilter === 'vegetarien' }"
+          @click="toggleDiet('vegetarien')"
+        />
+        <Chip
+          label="Vegan"
+          :class="{ active: dietFilter === 'vegan' }"
+          @click="toggleDiet('vegan')"
+        />
+      </div>
+      <div class="filter-group">
+        <span class="filter-label">Épice max</span>
+        <button
+          v-for="opt in SPICE_LEVELS"
+          :key="opt.value"
+          type="button"
+          class="spice-chip"
+          :class="{ active: maxSpice === opt.value }"
+          :title="opt.label"
+          @click="toggleMaxSpice(opt.value)"
+        >
+          <SpicePeppers :level="opt.value" size="sm" />
+        </button>
+      </div>
     </div>
 
     <div v-if="recipes.moods.length" class="moods cm-rise cm-rise-delay-2">
@@ -201,6 +247,49 @@ h1 {
   gap: 0.85rem;
   align-items: end;
   margin-bottom: 1rem;
+}
+
+.extra-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.5rem;
+  margin-bottom: 0.85rem;
+  align-items: center;
+}
+
+.filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.filter-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--cm-muted);
+  margin-right: 0.25rem;
+}
+
+.spice-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  cursor: pointer;
+  color: inherit;
+}
+
+.spice-chip.active {
+  border-color: #c2410c;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #c2410c 20%, transparent);
+}
+
+.extra-filters :deep(.p-chip.active) {
+  background: var(--cm-grad-warm);
+  color: #fff;
 }
 
 .field {

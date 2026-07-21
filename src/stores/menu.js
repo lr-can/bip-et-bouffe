@@ -6,6 +6,8 @@ import {
   LUNCH_COURSE_TYPES,
   recipeTypesForSlot,
   toNumber,
+  flagTrue,
+  spiceLevel,
 } from '@/utils/recipe'
 import { buildShoppingList } from '@/composables/useShoppingList'
 
@@ -45,6 +47,10 @@ export const useMenuStore = defineStore('menu', {
     mood: '',
     allergies: '',
     budgetParJour: null,
+    /** '' | vegetarien | vegan */
+    diet: '',
+    /** null = pas de limite, 0–3 = épice max acceptée */
+    maxSpice: null,
     activeDay: 0,
     days: [emptyDay(), emptyDay(), emptyDay()],
     includePetitDejeuner: true,
@@ -320,11 +326,38 @@ export const useMenuStore = defineStore('menu', {
         if (matched.length) pool = matched
       }
 
+      if (this.diet === 'vegan') {
+        const matched = pool.filter((r) => flagTrue(r.vegan))
+        if (matched.length) pool = matched
+      } else if (this.diet === 'vegetarien') {
+        const matched = pool.filter((r) => flagTrue(r.vegetarien) || flagTrue(r.vegan))
+        if (matched.length) pool = matched
+      }
+
+      if (this.maxSpice != null && this.maxSpice !== '') {
+        const cap = spiceLevel(this.maxSpice)
+        const matched = pool.filter((r) => spiceLevel(r.spiceLevel) <= cap)
+        if (matched.length) pool = matched
+      }
+
       const scoreCandidate = (recipe) => {
         let score = 12 + Math.random() * 3
         if (this._conflictsAllergy(recipe)) score -= 35
         if (this.mood && normalize(recipe.mood) === normalize(this.mood)) score += 8
         else if (this.mood) score -= 2
+        if (this.diet === 'vegan') {
+          if (flagTrue(recipe.vegan)) score += 10
+          else score -= 45
+        } else if (this.diet === 'vegetarien') {
+          if (flagTrue(recipe.vegan) || flagTrue(recipe.vegetarien)) score += 10
+          else score -= 45
+        }
+        if (this.maxSpice != null && this.maxSpice !== '') {
+          const level = spiceLevel(recipe.spiceLevel)
+          const cap = spiceLevel(this.maxSpice)
+          if (level <= cap) score += 4
+          else score -= 40
+        }
         if (localUsed.has(recipe.idRecette)) score -= allowReuse ? 5 : 70
         if (excludeId && recipe.idRecette === excludeId) score -= 100
 

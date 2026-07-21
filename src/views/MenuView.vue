@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import Button from 'primevue/button'
@@ -17,11 +17,15 @@ import {
   RECIPE_TYPES,
   LUNCH_COURSE_TYPES,
   SLOT_META,
+  SPICE_LEVELS,
   typeLabel,
+  dietLabels,
+  spiceLevel,
 } from '@/utils/recipe'
 import { copyShoppingList } from '@/composables/useShoppingList'
 import { downloadMenuPdf } from '@/composables/useRecipePdf'
 import { useScrollReveal } from '@/composables/useScrollReveal'
+import SpicePeppers from '@/components/SpicePeppers.vue'
 
 const sheets = useSheetsStore()
 const recipes = useRecipesStore()
@@ -33,19 +37,127 @@ const pickType = ref(null)
 const pickRecipe = ref(null)
 const replaceType = ref(null)
 const generating = ref(false)
+const genPhraseIndex = ref(0)
 const rerolling = ref(null)
 const wizardStep = ref(0)
 const stepAnimKey = ref(0)
+const phraseIndex = ref(0)
 const mealRowEls = ref([])
 
 const WIZARD_STEPS = [
-  { id: 'personnes', title: 'Pour combien ?', hint: 'Le nombre de convives pour calibrer quantités et coûts.' },
-  { id: 'jours', title: 'Sur combien de jours ?', hint: 'On prépare un menu jour par jour.' },
-  { id: 'repas', title: 'Quels repas ?', hint: 'Choisis ce qu’on doit composer chaque jour.' },
-  { id: 'ambiance', title: 'Quelle ambiance ?', hint: 'Optionnel — pour orienter le style des plats.' },
-  { id: 'allergies', title: 'Des allergies à éviter ?', hint: 'On écartera les recettes concernées.' },
-  { id: 'budget', title: 'Un budget par jour ?', hint: 'Laisse vide si tu préfères sans limite.' },
+  {
+    id: 'personnes',
+    titles: ['Pour combien ?', 'Combien autour de la table ?', 'On accueille qui ?'],
+    hints: [
+      'Le nombre de convives pour calibrer quantités et coûts.',
+      'On ajuste portions et budget d’un coup d’œil.',
+      'Plus on est de fous… plus on dose juste.',
+    ],
+  },
+  {
+    id: 'jours',
+    titles: ['Sur combien de jours ?', 'On prévoit jusqu’à quand ?', 'Quelle fenêtre de menus ?'],
+    hints: [
+      'On prépare un menu jour par jour.',
+      'Du week-end express à la semaine complète.',
+      'Chaque jour aura ses repas, sans te répéter trop.',
+    ],
+  },
+  {
+    id: 'repas',
+    titles: ['Quels repas ?', 'On compose quels moments ?', 'Petit-déj, midi, soir ?'],
+    hints: [
+      'Choisis ce qu’on doit composer chaque jour.',
+      'Coche seulement ce qui compte vraiment.',
+      'Moins de cases = un planning plus léger.',
+    ],
+  },
+  {
+    id: 'ambiance',
+    titles: ['Quelle ambiance ?', 'Quel vibe pour la table ?', 'Une humeur culinaire ?'],
+    hints: [
+      'Optionnel — pour orienter le style des plats.',
+      'Cosy, été, comfort food… à toi de voir.',
+      'Laisse vide si tu veux rester ouvert.',
+    ],
+  },
+  {
+    id: 'epice',
+    titles: ['Jusqu’à quel niveau d’épice ?', 'On ose le piment ?', 'Ta zone de confort pimentée ?'],
+    hints: [
+      'On restera dans ta zone de confort pimentée.',
+      'Du tout doux au feu contrôlé — tu choisis le plafond.',
+      'Pas de surprise brûlante si tu ne le veux pas.',
+    ],
+  },
+  {
+    id: 'regime',
+    titles: ['Un régime particulier ?', 'Végé, vegan, ou libre ?', 'Des filtres assiette ?'],
+    hints: [
+      'Végétarien, vegan, ou aucun filtre.',
+      'On ne proposera que ce qui colle à ton assiette.',
+      'Sans contrainte ? Passe tout droit.',
+    ],
+  },
+  {
+    id: 'allergies',
+    titles: ['Des allergies à éviter ?', 'Des non-négociables santé ?', 'Ingrédients à écarter ?'],
+    hints: [
+      'On écartera les recettes concernées.',
+      'Mieux vaut prévenir que soigner — on filtre pour toi.',
+      'Rien à signaler ? Continue sans rien cocher.',
+    ],
+  },
+  {
+    id: 'budget',
+    titles: ['Un budget par jour ?', 'On garde l’œil sur la note ?', 'Plafond wallet du jour ?'],
+    hints: [
+      'Laisse vide si tu préfères sans limite.',
+      'Un montant pour guider les choix, sans stress.',
+      'On privilégiera les assiettes dans ton enveloppe.',
+    ],
+  },
 ]
+
+const GEN_PHRASES = [
+  'On ouvre le carnet…',
+  'On dose les portions…',
+  'On croise ambiances & assiettes…',
+  'On évite les doublons…',
+  'On vérifie le piment…',
+  'Presque prêt — dernière touche…',
+]
+
+const currentWizard = computed(() => WIZARD_STEPS[wizardStep.value])
+const wizardProgress = computed(() => ((wizardStep.value + 1) / WIZARD_STEPS.length) * 100)
+
+const liveTitle = computed(() => {
+  const titles = currentWizard.value?.titles || ['']
+  return titles[phraseIndex.value % titles.length]
+})
+const liveHint = computed(() => {
+  const hints = currentWizard.value?.hints || ['']
+  return hints[phraseIndex.value % hints.length]
+})
+const liveGenPhrase = computed(() => GEN_PHRASES[genPhraseIndex.value % GEN_PHRASES.length])
+
+let phraseTimer = null
+let genPhraseTimer = null
+
+function startPhraseCycle() {
+  stopPhraseCycle()
+  phraseIndex.value = 0
+  phraseTimer = window.setInterval(() => {
+    phraseIndex.value += 1
+  }, 4200)
+}
+
+function stopPhraseCycle() {
+  if (phraseTimer) {
+    clearInterval(phraseTimer)
+    phraseTimer = null
+  }
+}
 
 const { refresh: refreshReveal } = useScrollReveal(mealRowEls, {
   resetOn: () => [menu.activeDay, menu.allSelectedIds.join('|'), menu.nbJours, menu.phase],
@@ -85,8 +197,6 @@ const selectedAllergies = computed({
 })
 
 const activeDay = computed(() => menu.currentDay)
-const currentWizard = computed(() => WIZARD_STEPS[wizardStep.value])
-const wizardProgress = computed(() => ((wizardStep.value + 1) / WIZARD_STEPS.length) * 100)
 
 const pickPool = computed(() => {
   let list = recipes.all
@@ -114,6 +224,7 @@ function goWizard(delta) {
   if (next < 0 || next >= WIZARD_STEPS.length) return
   wizardStep.value = next
   stepAnimKey.value += 1
+  startPhraseCycle()
 }
 
 function openReplace(type) {
@@ -142,9 +253,23 @@ function confirmPick() {
 
 async function generate() {
   generating.value = true
-  await new Promise((r) => setTimeout(r, 280))
+  genPhraseIndex.value = 0
+  stopPhraseCycle()
+  if (genPhraseTimer) clearInterval(genPhraseTimer)
+  genPhraseTimer = window.setInterval(() => {
+    genPhraseIndex.value += 1
+  }, 700)
+
+  await new Promise((r) => setTimeout(r, 2800))
   const result = menu.generate()
+
+  if (genPhraseTimer) {
+    clearInterval(genPhraseTimer)
+    genPhraseTimer = null
+  }
+  await new Promise((r) => setTimeout(r, 450))
   generating.value = false
+  if (menu.phase === 'wizard') startPhraseCycle()
 
   if (!result.recipes) {
     toast.add({
@@ -231,12 +356,19 @@ function backToWizard() {
   menu.setPhase('wizard')
   wizardStep.value = 0
   stepAnimKey.value += 1
+  startPhraseCycle()
 }
 
 onMounted(() => {
   sheets.ensureLoaded().catch(() => {})
   menu.setNbJours(menu.nbJours)
   refreshReveal()
+  if (menu.phase === 'wizard') startPhraseCycle()
+})
+
+onUnmounted(() => {
+  stopPhraseCycle()
+  if (genPhraseTimer) clearInterval(genPhraseTimer)
 })
 </script>
 
@@ -287,15 +419,25 @@ onMounted(() => {
             class="wiz-dot"
             :class="{ active: i === wizardStep, done: i < wizardStep }"
             :aria-label="step.title"
-            @click="wizardStep = i; stepAnimKey += 1"
+            @click="wizardStep = i; stepAnimKey += 1; startPhraseCycle()"
           />
         </div>
 
         <Transition name="wiz-slide" mode="out-in">
-          <div :key="stepAnimKey" class="wizard-card">
+          <div :key="stepAnimKey" class="wizard-card breathe">
             <p class="wiz-kicker">Étape {{ wizardStep + 1 }} / {{ WIZARD_STEPS.length }}</p>
-            <h2 class="cm-display wiz-title">{{ currentWizard.title }}</h2>
-            <p class="wiz-hint">{{ currentWizard.hint }}</p>
+            <div class="wiz-copy">
+              <Transition name="phrase-fade" mode="out-in">
+                <h2 :key="`${wizardStep}-${phraseIndex}-t`" class="cm-display wiz-title">
+                  {{ liveTitle }}
+                </h2>
+              </Transition>
+              <Transition name="phrase-fade" mode="out-in">
+                <p :key="`${wizardStep}-${phraseIndex}-h`" class="wiz-hint">
+                  {{ liveHint }}
+                </p>
+              </Transition>
+            </div>
 
             <div v-if="currentWizard.id === 'personnes'" class="wiz-answer big-number">
               <InputNumber v-model="menu.nbPersonnes" :min="1" :max="30" showButtons />
@@ -355,6 +497,59 @@ onMounted(() => {
                 fluid
                 placeholder="Toutes les ambiances"
               />
+            </div>
+
+            <div v-else-if="currentWizard.id === 'epice'" class="wiz-answer">
+              <div class="spice-wizard">
+                <button
+                  type="button"
+                  class="spice-wiz-btn"
+                  :class="{ on: menu.maxSpice === null }"
+                  @click="menu.maxSpice = null"
+                >
+                  Pas de limite
+                </button>
+                <button
+                  v-for="opt in SPICE_LEVELS"
+                  :key="opt.value"
+                  type="button"
+                  class="spice-wiz-btn"
+                  :class="{ on: menu.maxSpice === opt.value }"
+                  @click="menu.maxSpice = opt.value"
+                >
+                  <SpicePeppers :level="opt.value" />
+                  <span>{{ opt.label }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div v-else-if="currentWizard.id === 'regime'" class="wiz-answer">
+              <div class="diet-wizard">
+                <button
+                  type="button"
+                  class="diet-wiz-btn"
+                  :class="{ on: menu.diet === '' }"
+                  @click="menu.diet = ''"
+                >
+                  Aucun
+                </button>
+                <button
+                  type="button"
+                  class="diet-wiz-btn"
+                  :class="{ on: menu.diet === 'vegetarien' }"
+                  @click="menu.diet = 'vegetarien'"
+                >
+                  Végétarien
+                </button>
+                <button
+                  type="button"
+                  class="diet-wiz-btn"
+                  :class="{ on: menu.diet === 'vegan' }"
+                  @click="menu.diet = 'vegan'"
+                >
+                  Vegan
+                </button>
+              </div>
             </div>
 
             <div v-else-if="currentWizard.id === 'allergies'" class="wiz-answer">
@@ -476,6 +671,18 @@ onMounted(() => {
                     <strong>{{ slotRecipe(type).nomRecette }}</strong>
                     <p>
                       <Tag v-if="slotRecipe(type).mood" :value="slotRecipe(type).mood" severity="secondary" rounded />
+                      <Tag
+                        v-for="d in dietLabels(slotRecipe(type))"
+                        :key="d"
+                        :value="d"
+                        :severity="d === 'Vegan' ? 'success' : 'info'"
+                        rounded
+                      />
+                      <SpicePeppers
+                        v-if="spiceLevel(slotRecipe(type).spiceLevel) > 0"
+                        :level="slotRecipe(type).spiceLevel"
+                        size="sm"
+                      />
                       <Tag v-if="slotRecipe(type).allergie" :value="slotRecipe(type).allergie" severity="warn" rounded />
                       <span>{{ slotRecipe(type).tps || '—' }}</span>
                       <span>{{ slotRecipe(type).cout.toFixed(2) }} €</span>
@@ -631,6 +838,25 @@ onMounted(() => {
         <Button label="Valider" class="cm-btn-warm" :disabled="!pickRecipe" @click="confirmPick" />
       </template>
     </Dialog>
+
+    <Teleport to="body">
+      <Transition name="gen-fade">
+        <div v-if="generating" class="gen-overlay" role="status" aria-live="polite">
+          <div class="gen-stage">
+            <div class="gen-orb gen-orb--a" aria-hidden="true" />
+            <div class="gen-orb gen-orb--b" aria-hidden="true" />
+            <div class="gen-orb gen-orb--c" aria-hidden="true" />
+            <div class="gen-core breathe-strong" aria-hidden="true">
+              <i class="pi pi-sparkles" />
+            </div>
+            <Transition name="phrase-fade" mode="out-in">
+              <p :key="genPhraseIndex" class="gen-phrase">{{ liveGenPhrase }}</p>
+            </Transition>
+            <p class="gen-sub">Composition du planning…</p>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </section>
 </template>
 
@@ -732,6 +958,16 @@ h1 {
   gap: 0.55rem;
 }
 
+.wizard-card.breathe {
+  animation: wiz-breathe 5.2s ease-in-out infinite;
+}
+
+.wiz-copy {
+  display: grid;
+  gap: 0.45rem;
+  min-height: 4.6rem;
+}
+
 .wiz-kicker {
   margin: 0;
   font-size: 0.75rem;
@@ -751,10 +987,72 @@ h1 {
   color: var(--cm-muted);
 }
 
+.phrase-fade-enter-active,
+.phrase-fade-leave-active {
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+
+.phrase-fade-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.phrase-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@keyframes wiz-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--cm-glow, rgba(255, 107, 53, 0.18)) 55%, transparent);
+  }
+  50% {
+    transform: scale(1.012);
+    box-shadow: 0 16px 40px color-mix(in srgb, var(--cm-glow, rgba(255, 107, 53, 0.28)) 80%, transparent);
+  }
+}
+
 .wiz-answer {
   display: grid;
   gap: 0.75rem;
   margin-top: 0.35rem;
+}
+
+.spice-wizard,
+.diet-wizard {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.spice-wiz-btn,
+.diet-wiz-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  color: inherit;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.spice-wiz-btn:hover,
+.diet-wiz-btn:hover {
+  border-color: color-mix(in srgb, #c2410c 40%, var(--cm-border));
+}
+
+.spice-wiz-btn.on,
+.diet-wiz-btn.on {
+  border-color: #c2410c;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #c2410c 20%, transparent);
+  background: color-mix(in srgb, #c2410c 8%, var(--cm-surface));
 }
 
 .big-number {
@@ -1174,6 +1472,119 @@ h1 {
   padding: 3rem;
 }
 
+.gen-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 30% 40%, color-mix(in srgb, #ff6b35 28%, transparent), transparent 42%),
+    radial-gradient(circle at 70% 55%, color-mix(in srgb, #2dd4bf 22%, transparent), transparent 45%),
+    color-mix(in srgb, #0b1220 78%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.gen-stage {
+  position: relative;
+  width: min(22rem, 86vw);
+  min-height: 14rem;
+  display: grid;
+  place-items: center;
+  gap: 0.85rem;
+  text-align: center;
+}
+
+.gen-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(2px);
+  opacity: 0.55;
+  animation: gen-orbit 4.8s linear infinite;
+}
+
+.gen-orb--a {
+  width: 7.5rem;
+  height: 7.5rem;
+  background: color-mix(in srgb, #ff6b35 55%, transparent);
+  animation-duration: 5.4s;
+}
+
+.gen-orb--b {
+  width: 5.2rem;
+  height: 5.2rem;
+  background: color-mix(in srgb, #ff4d8d 50%, transparent);
+  animation-direction: reverse;
+  animation-duration: 4.2s;
+}
+
+.gen-orb--c {
+  width: 3.4rem;
+  height: 3.4rem;
+  background: color-mix(in srgb, #2dd4bf 55%, transparent);
+  animation-duration: 3.6s;
+}
+
+.gen-core {
+  position: relative;
+  z-index: 1;
+  width: 4.2rem;
+  height: 4.2rem;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 1.35rem;
+  background: var(--cm-grad-warm);
+  box-shadow: 0 12px 36px color-mix(in srgb, #ff6b35 45%, transparent);
+}
+
+.breathe-strong {
+  animation: wiz-breathe 2.4s ease-in-out infinite;
+}
+
+.gen-phrase {
+  position: relative;
+  z-index: 1;
+  margin: 0.6rem 0 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.25rem, 3vw, 1.65rem);
+  font-weight: 700;
+  color: #fff;
+  min-height: 2.2em;
+}
+
+.gen-sub {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  color: color-mix(in srgb, #fff 70%, transparent);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.gen-fade-enter-active,
+.gen-fade-leave-active {
+  transition: opacity 0.35s ease;
+}
+
+.gen-fade-enter-from,
+.gen-fade-leave-to {
+  opacity: 0;
+}
+
+@keyframes gen-orbit {
+  0% {
+    transform: rotate(0deg) translateX(3.2rem) rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) translateX(3.2rem) rotate(-180deg) scale(1.12);
+  }
+  100% {
+    transform: rotate(360deg) translateX(3.2rem) rotate(-360deg) scale(1);
+  }
+}
+
 @media (max-width: 820px) {
   .hero-band {
     flex-direction: column;
@@ -1193,7 +1604,14 @@ h1 {
 @media (prefers-reduced-motion: reduce) {
   .wiz-slide-enter-active,
   .wiz-slide-leave-active,
-  .dice-btn:active {
+  .phrase-fade-enter-active,
+  .phrase-fade-leave-active,
+  .gen-fade-enter-active,
+  .gen-fade-leave-active,
+  .dice-btn:active,
+  .wizard-card.breathe,
+  .breathe-strong,
+  .gen-orb {
     transition: none;
     animation: none;
   }

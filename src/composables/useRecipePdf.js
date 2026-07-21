@@ -1,5 +1,5 @@
 import { jsPDF } from 'jspdf'
-import { typeLabel } from '@/utils/recipe'
+import { typeLabel, spiceLabel, dietLabels } from '@/utils/recipe'
 
 const COLORS = {
   navy: [15, 32, 74],
@@ -277,6 +277,8 @@ export async function downloadMenuPdf({
         [
           recipe.mood && `Ambiance : ${recipe.mood}`,
           recipe.difficulte && `Difficulte : ${recipe.difficulte}`,
+          `Epice : ${spiceLabel(recipe.spiceLevel)}`,
+          dietLabels(recipe).length && dietLabels(recipe).join(' / '),
           recipe.tps && `Temps : ${recipe.tps}`,
           recipe.allergie && `Allergies : ${recipe.allergie}`,
           `Cout : ${Number(recipe.cout || 0).toFixed(2)} EUR`,

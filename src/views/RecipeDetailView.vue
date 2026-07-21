@@ -10,9 +10,10 @@ import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
-import { typeLabel, toNumber } from '@/utils/recipe'
+import { typeLabel, toNumber, dietLabels, spiceLabel } from '@/utils/recipe'
 import { costForQuantity } from '@/utils/nutrition'
 import { downloadRecipePdf } from '@/composables/useRecipePdf'
+import SpicePeppers from '@/components/SpicePeppers.vue'
 
 const props = defineProps({
   id: { type: String, required: true },
@@ -26,6 +27,7 @@ const personnes = ref(2)
 const selectedAdaptationIds = ref([])
 const priceDrafts = reactive({})
 const savingPriceId = ref(null)
+const editingPriceId = ref(null)
 
 const recipe = computed(() => recipes.enriched(props.id, personnes.value))
 const allergenAdaptationOptions = computed(() =>
@@ -51,24 +53,50 @@ const recipeSubstitutionPreview = computed(() => {
     .filter(Boolean)
 })
 
+function catalogUnitPrice(ing) {
+  return toNumber(ing?.prixUnitaire ?? ing?.prix, 0)
+}
+
+function formatCatalogPrice(ing) {
+  const prix = editingPriceId.value === ing.idIngr
+    ? toNumber(priceDrafts[ing.idIngr], catalogUnitPrice(ing))
+    : catalogUnitPrice(ing)
+  const unit = ing.uniteCatalogue || ing.unite || 'u'
+  return `${prix.toFixed(2)} € / ${unit}`
+}
+
 function syncPriceDrafts() {
   for (const ing of recipe.value?.ingredients || []) {
     if (priceDrafts[ing.idIngr] === undefined) {
-      priceDrafts[ing.idIngr] = toNumber(ing.prixUnitaire, 0)
+      priceDrafts[ing.idIngr] = catalogUnitPrice(ing)
     }
   }
 }
 
 function priceDirty(ing) {
-  return toNumber(priceDrafts[ing.idIngr], 0) !== toNumber(ing.prixUnitaire, 0)
+  return toNumber(priceDrafts[ing.idIngr], 0) !== catalogUnitPrice(ing)
+}
+
+function startEditPrice(ing) {
+  priceDrafts[ing.idIngr] = catalogUnitPrice(ing)
+  editingPriceId.value = ing.idIngr
+}
+
+function cancelEditPrice(ing) {
+  priceDrafts[ing.idIngr] = catalogUnitPrice(ing)
+  if (editingPriceId.value === ing.idIngr) editingPriceId.value = null
 }
 
 /** Coût estimé avec le prix catalogue en cours d'édition (aperçu live). */
 function ingredientCostPreview(ing) {
+  const draft =
+    editingPriceId.value === ing.idIngr
+      ? toNumber(priceDrafts[ing.idIngr], catalogUnitPrice(ing))
+      : catalogUnitPrice(ing)
   const priced = {
     ...ing,
     unite: ing.uniteCatalogue || ing.unite,
-    prixUnitaire: toNumber(priceDrafts[ing.idIngr], toNumber(ing.prixUnitaire, 0)),
+    prixUnitaire: draft,
   }
   const perPers = costForQuantity(priced, Number(ing.qteParPersonne) || 0, ing.unite)
   const total = costForQuantity(priced, Number(ing.quantite) || 0, ing.unite)
@@ -96,15 +124,27 @@ async function saveIngredientPrice(ing) {
     })
     return
   }
+  const next = toNumber(priceDrafts[ing.idIngr], 0)
+  // Ne jamais écraser un prix existant par un 0 « accidentel » sans intention claire
+  if (next <= 0 && catalogUnitPrice(ing) > 0) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Prix invalide',
+      detail: 'Entre un prix > 0, ou annule la modification.',
+      life: 3000,
+    })
+    return
+  }
   savingPriceId.value = ing.idIngr
   try {
-    const prixUnitaire = String(toNumber(priceDrafts[ing.idIngr], 0))
+    const prixUnitaire = String(next)
     await sheets.updateRow('ingredients', row._row, { prixUnitaire })
-    priceDrafts[ing.idIngr] = toNumber(prixUnitaire, 0)
+    priceDrafts[ing.idIngr] = next
+    editingPriceId.value = null
     toast.add({
       severity: 'success',
       summary: 'Prix mis à jour',
-      detail: `${ing.nomIngr} · ${toNumber(prixUnitaire, 0).toFixed(2)} € / ${ing.uniteCatalogue || ing.unite}`,
+      detail: `${ing.nomIngr} · ${next.toFixed(2)} € / ${ing.uniteCatalogue || ing.unite}`,
       life: 2500,
     })
   } catch (err) {
@@ -125,14 +165,21 @@ watch(
     const base = recipes.byId(props.id)
     personnes.value = toNumber(base?.nbPerso, 2) || 2
     selectedAdaptationIds.value = []
+    editingPriceId.value = null
     Object.keys(priceDrafts).forEach((k) => delete priceDrafts[k])
   },
   { immediate: true },
 )
 
 watch(
-  () => recipe.value?.ingredients?.map((i) => `${i.idIngr}:${i.prixUnitaire}`).join('|'),
-  () => syncPriceDrafts(),
+  () => recipe.value?.ingredients?.map((i) => `${i.idIngr}:${i.prixUnitaire ?? i.prix}`).join('|'),
+  () => {
+    // Resync drafts when sheet data change, sauf pour la ligne en cours d'édition
+    for (const ing of recipe.value?.ingredients || []) {
+      if (editingPriceId.value === ing.idIngr) continue
+      priceDrafts[ing.idIngr] = catalogUnitPrice(ing)
+    }
+  },
   { immediate: true },
 )
 
@@ -164,11 +211,21 @@ onMounted(() => {
           <div class="tags">
             <Tag :value="typeLabel(recipe.type)" rounded />
             <Tag v-if="recipe.mood" :value="recipe.mood" severity="secondary" rounded />
+            <Tag
+              v-for="d in dietLabels(recipe)"
+              :key="d"
+              :value="d"
+              :severity="d === 'Vegan' ? 'success' : 'info'"
+              rounded
+            />
           </div>
           <h1 class="cm-display cm-grad-text">{{ recipe.nomRecette }}</h1>
           <p class="meta">
             <span v-if="recipe.tps"><i class="pi pi-clock" /> {{ recipe.tps }}</span>
             <span v-if="recipe.difficulte"><i class="pi pi-bolt" /> {{ recipe.difficulte }}</span>
+            <span class="spice-meta" :title="spiceLabel(recipe.spiceLevel)">
+              <SpicePeppers :level="recipe.spiceLevel" show-label size="sm" />
+            </span>
             <span v-if="recipe.allergie"><i class="pi pi-exclamation-triangle" /> {{ recipe.allergie }}</span>
             <span>
               <i class="pi pi-wallet" />
@@ -292,9 +349,21 @@ onMounted(() => {
                     <strong>{{ ingredientCostPreview(ing).total.toFixed(2) }} €</strong>
                     <span class="muted">recette ({{ personnes }} pers.)</span>
                   </span>
+                  <span class="ing-catalog-price" :title="'Prix catalogue'">
+                    {{ formatCatalogPrice(ing) }}
+                  </span>
+                  <Button
+                    v-if="editingPriceId !== ing.idIngr"
+                    icon="pi pi-pencil"
+                    rounded
+                    text
+                    size="small"
+                    class="price-edit-btn"
+                    aria-label="Modifier le prix catalogue"
+                    @click="startEditPrice(ing)"
+                  />
                 </div>
-                <div class="ing-price-edit">
-                  <label>Prix catalogue</label>
+                <div v-if="editingPriceId === ing.idIngr" class="ing-price-edit">
                   <InputNumber
                     v-model="priceDrafts[ing.idIngr]"
                     mode="decimal"
@@ -302,6 +371,7 @@ onMounted(() => {
                     :minFractionDigits="0"
                     :maxFractionDigits="4"
                     class="price-input"
+                    autofocus
                   />
                   <span class="price-unit">€ / {{ ing.uniteCatalogue || ing.unite }}</span>
                   <Button
@@ -313,6 +383,14 @@ onMounted(() => {
                     :loading="savingPriceId === ing.idIngr"
                     aria-label="Enregistrer le prix"
                     @click="saveIngredientPrice(ing)"
+                  />
+                  <Button
+                    icon="pi pi-times"
+                    rounded
+                    text
+                    severity="secondary"
+                    aria-label="Annuler"
+                    @click="cancelEditPrice(ing)"
                   />
                 </div>
               </div>
@@ -427,6 +505,10 @@ h1 {
   gap: 0.3rem;
 }
 
+.spice-meta {
+  color: inherit;
+}
+
 .macros-card {
   margin-top: 0.9rem;
   padding: 0.85rem 1rem;
@@ -533,19 +615,22 @@ h1 {
   font-weight: 750;
 }
 
+.ing-catalog-price {
+  font-size: 0.78rem;
+  color: var(--cm-muted);
+  font-weight: 600;
+}
+
+.price-edit-btn {
+  margin-left: -0.15rem;
+}
+
 .ing-price-edit {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.45rem;
-}
-
-.ing-price-edit label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--cm-muted);
-  width: 100%;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
 }
 
 .price-input {

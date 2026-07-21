@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { useSheetsStore } from '@/stores/sheets'
-import { fuzzyMatch, toNumber } from '@/utils/recipe'
+import { fuzzyMatch, toNumber, flagTrue, spiceLevel, spiceLabel, dietLabels } from '@/utils/recipe'
 import { canonicalUnit, macrosForQuantity, sumMacros, isCatalogIngredient, costForQuantity } from '@/utils/nutrition'
 
 export const useRecipesStore = defineStore('recipes', {
@@ -135,20 +135,24 @@ export const useRecipesStore = defineStore('recipes', {
             saison: '',
             idAllergie: '',
           }
+          const pricedBase = {
+            ...base,
+            prixUnitaire: base.prixUnitaire ?? base.prix ?? 0,
+          }
           const qteParPersonne = toNumber(link.qteParPersonne, 0)
-          const unite = canonicalUnit(link.unite || base.unite || 'g')
+          const unite = canonicalUnit(link.unite || pricedBase.unite || 'g')
           const quantite = qteParPersonne * nb
-          const nomAllergie = this.allergenName(base.idAllergie)
-          const withUnit = { ...base, unite }
+          const nomAllergie = this.allergenName(pricedBase.idAllergie)
+          const withUnit = { ...pricedBase, unite }
           // Macros / coût sur la quantité totale, puis dérivés par personne
           const macros = macrosForQuantity(withUnit, quantite)
           const macrosParPers = macrosForQuantity(withUnit, qteParPersonne)
-          const cout = costForQuantity(base, quantite, unite)
-          const coutParPers = costForQuantity(base, qteParPersonne, unite)
+          const cout = costForQuantity(pricedBase, quantite, unite)
+          const coutParPers = costForQuantity(pricedBase, qteParPersonne, unite)
           return {
-            ...base,
+            ...pricedBase,
             unite,
-            uniteCatalogue: canonicalUnit(base.unite || 'g'),
+            uniteCatalogue: canonicalUnit(pricedBase.unite || 'g'),
             nomAllergie,
             qteParPersonne,
             quantite,
@@ -202,7 +206,14 @@ export const useRecipesStore = defineStore('recipes', {
     },
 
     search() {
-      return ({ mood = '', ingredientId = '', query = '' } = {}) => {
+      return ({
+        mood = '',
+        ingredientId = '',
+        query = '',
+        vegan = false,
+        vegetarien = false,
+        maxSpice = null,
+      } = {}) => {
         const sheets = useSheetsStore()
         let list = this.all.slice()
 
@@ -219,13 +230,26 @@ export const useRecipesStore = defineStore('recipes', {
           list = list.filter((r) => ids.has(r.idRecette))
         }
 
+        if (vegan) {
+          list = list.filter((r) => flagTrue(r.vegan))
+        } else if (vegetarien) {
+          list = list.filter((r) => flagTrue(r.vegetarien) || flagTrue(r.vegan))
+        }
+
+        if (maxSpice != null && maxSpice !== '') {
+          const cap = spiceLevel(maxSpice)
+          list = list.filter((r) => spiceLevel(r.spiceLevel) <= cap)
+        }
+
         if (query) {
           list = list.filter(
             (r) =>
               fuzzyMatch(r.nomRecette, query) ||
               fuzzyMatch(r.type, query) ||
               fuzzyMatch(r.mood, query) ||
-              fuzzyMatch(r.allergie, query),
+              fuzzyMatch(r.allergie, query) ||
+              fuzzyMatch(spiceLabel(r.spiceLevel), query) ||
+              dietLabels(r).some((d) => fuzzyMatch(d, query)),
           )
         }
 

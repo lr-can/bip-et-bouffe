@@ -184,8 +184,9 @@ function parseTsv(text) {
 }
 
 async function main() {
+  const pricesOnly = process.argv.includes('--prices-only')
   const catalog = parseTsv(RAW)
-  console.log(`Catalogue parsé: ${catalog.length} lignes`)
+  console.log(`Catalogue parsé: ${catalog.length} lignes${pricesOnly ? ' (restauration prix uniquement)' : ''}`)
 
   const sheets = getSheetsClient()
   await ensureHeaders(sheets, SHEETS.ingredients)
@@ -195,30 +196,58 @@ async function main() {
     catalog.map((r) => [String(r.nomIngr || '').trim().toLowerCase(), r]),
   )
 
+  const num = (v) => {
+    const n = Number(String(v ?? '').replace(',', '.').trim())
+    return Number.isFinite(n) ? n : 0
+  }
+
+  let restored = 0
   const merged = existing.map((row) => {
     const patch = byId.get(row.idIngr) || byName.get(String(row.nomIngr || '').trim().toLowerCase())
     if (!patch) return { ...row, categorie: row.categorie || '' }
+
+    if (pricesOnly) {
+      const current = num(row.prixUnitaire)
+      const next = num(patch.prixUnitaire)
+      if (current <= 0 && next > 0) {
+        restored += 1
+        return { ...row, prixUnitaire: String(patch.prixUnitaire) }
+      }
+      return row
+    }
+
+    const prix =
+      patch.prixUnitaire !== '' && patch.prixUnitaire != null
+        ? patch.prixUnitaire
+        : row.prixUnitaire
     return {
       ...row,
       ...patch,
       idIngr: row.idIngr || patch.idIngr,
+      prixUnitaire: prix,
     }
   })
 
-  // Ajoute les entrées catalogue absentes
-  const existingIds = new Set(merged.map((r) => r.idIngr))
-  const existingNames = new Set(
-    merged.map((r) => String(r.nomIngr || '').trim().toLowerCase()),
-  )
-  for (const item of catalog) {
-    const key = String(item.nomIngr || '').trim().toLowerCase()
-    if (existingIds.has(item.idIngr) || existingNames.has(key)) continue
-    merged.push(item)
+  // Ajoute les entrées catalogue absentes (sauf mode prices-only)
+  if (!pricesOnly) {
+    const existingIds = new Set(merged.map((r) => r.idIngr))
+    const existingNames = new Set(
+      merged.map((r) => String(r.nomIngr || '').trim().toLowerCase()),
+    )
+    for (const item of catalog) {
+      const key = String(item.nomIngr || '').trim().toLowerCase()
+      if (existingIds.has(item.idIngr) || existingNames.has(key)) continue
+      merged.push(item)
+    }
   }
 
   await rewriteSheet(sheets, 'ingredients', merged)
-  const cats = new Set(merged.map((r) => r.categorie).filter(Boolean))
-  console.log(`OK — ${merged.length} ingrédients, ${cats.size} catégories`)
+  if (pricesOnly) {
+    console.log(`OK — ${restored} prix restaurés sur ${merged.length} ingrédients`)
+  } else {
+    const cats = new Set(merged.map((r) => r.categorie).filter(Boolean))
+    console.log(`OK — ${merged.length} ingrédients, ${cats.size} catégories`)
+  }
 }
 
 main().catch((err) => {

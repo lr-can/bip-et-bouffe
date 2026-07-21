@@ -202,7 +202,7 @@ export function convertQty(qty, fromUnit, toUnit, nomIngr = '') {
  * On convertit via les grammes pour éviter les erreurs d'arrondi (250 g ≠ 0,3 kg).
  */
 export function costForQuantity(ingredient, quantite, uniteRecette = null) {
-  const prix = toNumber(ingredient?.prixUnitaire, 0)
+  const prix = toNumber(ingredient?.prixUnitaire ?? ingredient?.prix, 0)
   if (!prix) return 0
 
   const catalogUnit = canonicalUnit(ingredient?.unite || 'g')

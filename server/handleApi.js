@@ -176,7 +176,18 @@ export async function handleApi(req) {
         })
         const headers = headerRes.data.values?.[0] || sheet.columns
         const current = Object.fromEntries(headers.map((col, i) => [col, currentValues[i] ?? '']))
-        const merged = { ...current, ...body }
+        // Toujours écrire dans l’ordre du schéma, en récupérant chaque colonne par nom
+        // (évite d’écraser le catalogue si les headers sheet divergent légèrement).
+        const merged = {}
+        for (const col of sheet.columns) {
+          if (Object.prototype.hasOwnProperty.call(body, col)) {
+            merged[col] = body[col]
+          } else if (Object.prototype.hasOwnProperty.call(current, col)) {
+            merged[col] = current[col]
+          } else {
+            merged[col] = ''
+          }
+        }
         const row = objectToRow(merged, sheet.columns)
         const endCol = colLetter(sheet.columns.length)
         const result = await sheets.spreadsheets.values.update({

@@ -1,6 +1,7 @@
 <script setup>
 import { RouterLink } from 'vue-router'
-import { typeLabel } from '@/utils/recipe'
+import { typeLabel, dietLabels, spiceLevel } from '@/utils/recipe'
+import SpicePeppers from '@/components/SpicePeppers.vue'
 
 defineProps({
   recipe: { type: Object, required: true },
@@ -15,6 +16,20 @@ defineProps({
       <span v-if="recipe.mood" class="mood">{{ recipe.mood }}</span>
     </div>
     <h3 class="cm-display">{{ recipe.nomRecette }}</h3>
+    <div
+      v-if="spiceLevel(recipe.spiceLevel) > 0 || dietLabels(recipe).length"
+      class="badges"
+    >
+      <SpicePeppers v-if="spiceLevel(recipe.spiceLevel) > 0" :level="recipe.spiceLevel" size="sm" />
+      <span
+        v-for="d in dietLabels(recipe)"
+        :key="d"
+        class="diet-pill"
+        :class="d === 'Vegan' ? 'diet-pill--vegan' : 'diet-pill--veggie'"
+      >
+        {{ d }}
+      </span>
+    </div>
     <p class="meta">
       <span v-if="recipe.tps"><i class="pi pi-clock" /> {{ recipe.tps }}</span>
       <span v-if="recipe.difficulte"><i class="pi pi-bolt" /> {{ recipe.difficulte }}</span>
@@ -67,6 +82,34 @@ h3 {
   margin: 0;
   font-size: 1.25rem;
   line-height: 1.2;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  min-height: 0;
+}
+
+.diet-pill {
+  display: inline-flex;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.diet-pill--veggie {
+  color: #166534;
+  background: color-mix(in srgb, #22c55e 18%, transparent);
+}
+
+.diet-pill--vegan {
+  color: #115e59;
+  background: color-mix(in srgb, #14b8a6 20%, transparent);
 }
 
 .meta {

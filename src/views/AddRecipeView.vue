@@ -11,10 +11,12 @@ import MultiSelect from 'primevue/multiselect'
 import AutoComplete from 'primevue/autocomplete'
 import Steps from 'primevue/steps'
 import Message from 'primevue/message'
+import Dialog from 'primevue/dialog'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
 import { sheetsApi } from '@/services/sheetsApi'
-import { RECIPE_TYPES, fuzzyMatch, newId, toNumber } from '@/utils/recipe'
+import { RECIPE_TYPES, SPICE_LEVELS, fuzzyMatch, newId, toNumber, flagTrue, flagToSheet, spiceLevel, spiceLabel, dietLabels } from '@/utils/recipe'
+import SpicePeppers from '@/components/SpicePeppers.vue'
 import {
   macrosForQuantity,
   formatMacros,
@@ -24,6 +26,12 @@ import {
   canonicalUnit,
   costForQuantity,
 } from '@/utils/nutrition'
+import {
+  readDraft,
+  writeDraft,
+  clearDraft,
+  draftHasContent,
+} from '@/composables/useRecipeDraftCache'
 
 const UNIT_OPTIONS = [
   { label: 'g', value: 'g' },
@@ -46,6 +54,9 @@ const route = useRoute()
 const editId = computed(() => route.params.id || null)
 const isEdit = computed(() => Boolean(editId.value))
 const loadingRecipe = ref(false)
+const restoreDialogOpen = ref(false)
+const draftReady = ref(false)
+let draftSaveTimer = null
 
 const step = ref(0)
 const stepItems = [
@@ -64,6 +75,9 @@ const form = reactive({
   nbPerso: 4,
   allergie: '',
   imageUrl: '',
+  spiceLevel: 0,
+  vegan: false,
+  vegetarien: false,
 })
 
 const difficulteOptions = [
@@ -71,6 +85,18 @@ const difficulteOptions = [
   { label: 'Moyen', value: 'moyen' },
   { label: 'Difficile', value: 'difficile' },
 ]
+
+const spiceOptions = SPICE_LEVELS
+
+function onVeganChange(checked) {
+  form.vegan = checked
+  if (checked) form.vegetarien = true
+}
+
+function onVegetarienChange(checked) {
+  form.vegetarien = checked
+  if (!checked) form.vegan = false
+}
 
 const links = ref([])
 const stepsList = ref([{ texte: '', ordre: 1 }])
@@ -501,6 +527,49 @@ function prev() {
   step.value = Math.max(step.value - 1, 0)
 }
 
+function snapshotDraft() {
+  return {
+    step: step.value,
+    form: { ...form },
+    links: links.value.map((l) => ({ ...l })),
+    stepsList: stepsList.value.map((s) => ({ ...s })),
+  }
+}
+
+function applyDraft(data) {
+  if (!data) return
+  if (data.form) Object.assign(form, data.form)
+  if (Array.isArray(data.links)) links.value = data.links
+  if (Array.isArray(data.stepsList) && data.stepsList.length) {
+    stepsList.value = data.stepsList
+  }
+  if (data.step != null) step.value = Number(data.step) || 0
+}
+
+function acceptCachedDraft() {
+  applyDraft(readDraft(editId.value))
+  restoreDialogOpen.value = false
+  draftReady.value = true
+}
+
+function declineCachedDraft() {
+  clearDraft(editId.value)
+  restoreDialogOpen.value = false
+  draftReady.value = true
+}
+
+function scheduleDraftSave() {
+  if (!draftReady.value || loadingRecipe.value) return
+  clearTimeout(draftSaveTimer)
+  draftSaveTimer = setTimeout(() => {
+    const snap = snapshotDraft()
+    if (draftHasContent(snap)) writeDraft(editId.value, snap)
+    else clearDraft(editId.value)
+  }, 450)
+}
+
+watch([form, links, stepsList, step], scheduleDraftSave, { deep: true })
+
 async function submit() {
   const idRecette = isEdit.value ? editId.value : newId('rec')
   const fromIngredients = [
@@ -520,6 +589,9 @@ async function submit() {
     nbPerso: String(form.nbPerso || 2),
     allergie,
     imageUrl: form.imageUrl.trim(),
+    spiceLevel: String(spiceLevel(form.spiceLevel)),
+    vegan: flagToSheet(form.vegan),
+    vegetarien: flagToSheet(form.vegan || form.vegetarien),
   }
 
   const newIngredients = links.value
@@ -556,18 +628,6 @@ async function submit() {
     }))
 
   try {
-    // Persiste les prix catalogue modifiés avant d'enregistrer la recette
-    for (const link of links.value) {
-      if (link.isNew) continue
-      const row = sheets.data.ingredients?.find((r) => r.idIngr === link.idIngr)
-      if (!row?._row) continue
-      const nextPrix = String(toNumber(link.prixUnitaire, 0))
-      const prevPrix = String(toNumber(row.prixUnitaire, 0))
-      if (nextPrix !== prevPrix) {
-        await sheets.updateRow('ingredients', row._row, { prixUnitaire: nextPrix })
-      }
-    }
-
     if (isEdit.value) {
       await sheets.updateRecipe(idRecette, {
         recipe,
@@ -595,6 +655,8 @@ async function submit() {
         life: 3000,
       })
     }
+    clearDraft(editId.value)
+    draftReady.value = false
     router.push(`/recette/${idRecette}`)
   } catch {
     toast.add({
@@ -618,6 +680,9 @@ function loadRecipeForEdit(id) {
     nbPerso: toNumber(enriched.nbPerso, 4) || 4,
     allergie: enriched.allergie || '',
     imageUrl: enriched.imageUrl || '',
+    spiceLevel: spiceLevel(enriched.spiceLevel),
+    vegan: flagTrue(enriched.vegan),
+    vegetarien: flagTrue(enriched.vegetarien) || flagTrue(enriched.vegan),
   })
   links.value = (enriched.ingredients || []).map((ing) => ({
     idIngr: ing.idIngr,
@@ -648,6 +713,8 @@ function loadRecipeForEdit(id) {
 
 async function bootstrap() {
   loadingRecipe.value = true
+  draftReady.value = false
+  restoreDialogOpen.value = false
   try {
     await sheets.ensureLoaded()
     const next = {}
@@ -663,10 +730,25 @@ async function bootstrap() {
           life: 3000,
         })
         router.replace('/gerer')
+        return
+      }
+      const cached = readDraft(editId.value)
+      if (draftHasContent(cached)) {
+        restoreDialogOpen.value = true
+      } else {
+        draftReady.value = true
+      }
+    } else {
+      const cached = readDraft(null)
+      if (draftHasContent(cached)) {
+        restoreDialogOpen.value = true
+      } else {
+        draftReady.value = true
       }
     }
   } catch {
     /* message store */
+    draftReady.value = true
   } finally {
     loadingRecipe.value = false
   }
@@ -686,6 +768,9 @@ watch(
         nbPerso: 4,
         allergie: '',
         imageUrl: '',
+        spiceLevel: 0,
+        vegan: false,
+        vegetarien: false,
       })
       links.value = []
       stepsList.value = [{ texte: '', ordre: 1 }]
@@ -707,6 +792,22 @@ onMounted(bootstrap)
         </h1>
       </div>
     </header>
+
+    <Dialog
+      v-model:visible="restoreDialogOpen"
+      modal
+      header="Saisie en cours"
+      :closable="false"
+      :style="{ width: 'min(420px, 94vw)' }"
+    >
+      <p class="draft-prompt">
+        Récupérer les données sauvegardées en cache&nbsp;?
+      </p>
+      <template #footer>
+        <Button label="Non" text severity="secondary" @click="declineCachedDraft" />
+        <Button label="Oui" class="cm-btn-warm" rounded @click="acceptCachedDraft" />
+      </template>
+    </Dialog>
 
     <Message v-if="sheets.error" severity="error">
       Impossible de charger les données. Réessaie dans un instant.
@@ -751,6 +852,48 @@ onMounted(bootstrap)
             <label>Pers. de référence</label>
             <InputNumber v-model="form.nbPerso" :min="1" :max="30" fluid />
           </div>
+        </div>
+        <div class="field">
+          <label>Niveau d’épice</label>
+          <div class="spice-picker" role="radiogroup" aria-label="Niveau d’épice">
+            <button
+              v-for="opt in spiceOptions"
+              :key="opt.value"
+              type="button"
+              class="spice-option"
+              :class="{ active: form.spiceLevel === opt.value }"
+              role="radio"
+              :aria-checked="form.spiceLevel === opt.value"
+              @click="form.spiceLevel = opt.value"
+            >
+              <SpicePeppers :level="opt.value" />
+              <span>{{ opt.label }}</span>
+            </button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Régime</label>
+          <div class="diet-row">
+            <label class="diet-check">
+              <input
+                type="checkbox"
+                :checked="form.vegetarien"
+                @change="onVegetarienChange($event.target.checked)"
+              />
+              <span>Végétarien</span>
+            </label>
+            <label class="diet-check">
+              <input
+                type="checkbox"
+                :checked="form.vegan"
+                @change="onVeganChange($event.target.checked)"
+              />
+              <span>Vegan</span>
+            </label>
+          </div>
+          <p class="hint" style="margin-top: 0.35rem">
+            Vegan implique végétarien.
+          </p>
         </div>
         <div class="field">
           <label>Allergies (feuille allergènes)</label>
@@ -886,18 +1029,6 @@ onMounted(bootstrap)
                   <i class="pi pi-users" />
                   {{ linkCost(link).total.toFixed(2) }} € ({{ form.nbPerso }} pers.)
                 </span>
-              </div>
-              <div class="link-price-edit">
-                <label>Prix catalogue</label>
-                <InputNumber
-                  v-model="link.prixUnitaire"
-                  mode="decimal"
-                  :min="0"
-                  :minFractionDigits="0"
-                  :maxFractionDigits="4"
-                  class="price-input"
-                />
-                <span class="price-unit">€ / {{ link.uniteCatalogue || link.unite }}</span>
               </div>
             </div>
             <div class="link-actions">
@@ -1101,6 +1232,10 @@ onMounted(bootstrap)
           · {{ form.mood || 'sans ambiance' }}
           · {{ form.difficulte }}
           · {{ form.tps || 'temps —' }}
+          · {{ spiceLabel(form.spiceLevel) }}
+          <template v-if="dietLabels(form).length">
+            · {{ dietLabels(form).join(' · ') }}
+          </template>
         </p>
         <h3>Ingrédients ({{ links.length }})</h3>
         <ul>
@@ -1147,6 +1282,11 @@ onMounted(bootstrap)
   padding: 2rem;
   text-align: center;
   color: var(--cm-muted);
+}
+
+.draft-prompt {
+  margin: 0;
+  line-height: 1.45;
 }
 
 .page {
@@ -1197,6 +1337,59 @@ h1 {
 .field label {
   font-size: 0.82rem;
   font-weight: 600;
+}
+
+.spice-picker {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.spice-option {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.spice-option:hover {
+  border-color: color-mix(in srgb, #c2410c 45%, var(--cm-border));
+}
+
+.spice-option.active {
+  border-color: #c2410c;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #c2410c 22%, transparent);
+  background: color-mix(in srgb, #c2410c 8%, var(--cm-surface));
+}
+
+.diet-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem 1.25rem;
+}
+
+.diet-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.diet-check input {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--cm-accent, #c2410c);
 }
 
 .grid-2,
@@ -1366,36 +1559,6 @@ h1 {
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.35rem;
-}
-
-.link-price-edit {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.4rem;
-}
-
-.link-price-edit label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--cm-muted);
-  width: 100%;
-}
-
-.price-input {
-  width: 7rem;
-}
-
-.price-input :deep(.p-inputnumber),
-.price-input :deep(.p-inputnumber-input) {
-  width: 100%;
-}
-
-.price-unit {
-  font-size: 0.78rem;
-  color: var(--cm-muted);
-  font-weight: 600;
 }
 
 .recipe-macros {
