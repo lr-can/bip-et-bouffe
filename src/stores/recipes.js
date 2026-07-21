@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { useSheetsStore } from '@/stores/sheets'
 import { fuzzyMatch, toNumber } from '@/utils/recipe'
-import { canonicalUnit, macrosForQuantity, sumMacros, isCatalogIngredient } from '@/utils/nutrition'
+import { canonicalUnit, macrosForQuantity, sumMacros, isCatalogIngredient, costForQuantity } from '@/utils/nutrition'
 
 export const useRecipesStore = defineStore('recipes', {
   getters: {
@@ -138,17 +138,24 @@ export const useRecipesStore = defineStore('recipes', {
           const qteParPersonne = toNumber(link.qteParPersonne, 0)
           const unite = canonicalUnit(link.unite || base.unite || 'g')
           const quantite = qteParPersonne * nb
-          const prixUnitaire = toNumber(base.prixUnitaire, 0)
           const nomAllergie = this.allergenName(base.idAllergie)
-          const macros = macrosForQuantity({ ...base, unite }, quantite)
+          const withUnit = { ...base, unite }
+          // Macros / coût sur la quantité totale, puis dérivés par personne
+          const macros = macrosForQuantity(withUnit, quantite)
+          const macrosParPers = macrosForQuantity(withUnit, qteParPersonne)
+          const cout = costForQuantity(base, quantite, unite)
+          const coutParPers = costForQuantity(base, qteParPersonne, unite)
           return {
             ...base,
             unite,
+            uniteCatalogue: canonicalUnit(base.unite || 'g'),
             nomAllergie,
             qteParPersonne,
             quantite,
-            cout: quantite * prixUnitaire,
+            cout,
+            coutParPers,
             macros,
+            macrosParPers,
           }
         })
 
@@ -158,14 +165,11 @@ export const useRecipesStore = defineStore('recipes', {
           .sort((a, b) => toNumber(a.ordre, 0) - toNumber(b.ordre, 0))
 
         const cout = ingredients.reduce((sum, i) => sum + i.cout, 0)
+        const coutParPers = Math.round((cout / nb) * 100) / 100
+        // Macros par personne = somme des macros de chaque qteParPersonne
+        // (évite toute ambiguïté avec le total / nb)
+        const nutritionParPers = sumMacros(ingredients.map((i) => i.macrosParPers))
         const nutrition = sumMacros(ingredients.map((i) => i.macros))
-        const nutritionParPers = {
-          grams: Math.round((nutrition.grams / nb) * 10) / 10,
-          kcal: Math.round((nutrition.kcal / nb) * 10) / 10,
-          proteines: Math.round((nutrition.proteines / nb) * 10) / 10,
-          glucides: Math.round((nutrition.glucides / nb) * 10) / 10,
-          lipides: Math.round((nutrition.lipides / nb) * 10) / 10,
-        }
         const fromIngredients = [
           ...new Set(ingredients.map((i) => i.nomAllergie).filter(Boolean)),
         ]
@@ -188,6 +192,7 @@ export const useRecipesStore = defineStore('recipes', {
           ingredients,
           etapes,
           cout,
+          coutParPers,
           nutrition,
           nutritionParPers,
           allergiesDetectees,

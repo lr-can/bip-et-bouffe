@@ -183,6 +183,20 @@ export function convertQty(qty, fromUnit, toUnit, nomIngr = '') {
   return gramsToQuantity(fromG, to, nomIngr)
 }
 
+/**
+ * Coût d'une quantité : le prix catalogue est toujours pour `ingredient.unite`.
+ * On convertit la quantité de la recette vers cette unité avant de multiplier.
+ */
+export function costForQuantity(ingredient, quantite, uniteRecette = null) {
+  const prix = toNumber(ingredient?.prixUnitaire, 0)
+  if (!prix) return 0
+  const catalogUnit = canonicalUnit(ingredient?.unite || 'g')
+  const recipeUnit = canonicalUnit(uniteRecette || catalogUnit)
+  const qtyCatalog = convertQty(quantite, recipeUnit, catalogUnit, ingredient?.nomIngr)
+  if (qtyCatalog === null) return round1(toNumber(quantite, 0) * prix)
+  return Math.round(qtyCatalog * prix * 100) / 100
+}
+
 export function isCatalogIngredient(ing) {
   if (!ing?.idIngr || !ing?.nomIngr) return false
   if (String(ing.categorie || '').trim()) return true

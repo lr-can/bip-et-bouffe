@@ -68,7 +68,8 @@ export const useMenuStore = defineStore('menu', {
       return (dayIndex) =>
         this.dayRecipes(dayIndex).reduce(
           (acc, r) => {
-            const n = r.nutrition
+            // Macros par personne (pas le total du foyer)
+            const n = r.nutritionParPers || r.nutrition
             if (!n) return acc
             return {
               kcal: Math.round((acc.kcal + n.kcal) * 10) / 10,

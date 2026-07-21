@@ -281,7 +281,7 @@ onMounted(() => {
           <span class="day-meta">
             <template v-if="day.filled">
               {{ day.cost.toFixed(0) }}€
-              <template v-if="day.nutrition?.kcal"> · {{ Math.round(day.nutrition.kcal) }} kcal</template>
+              <template v-if="day.nutrition?.kcal"> · {{ Math.round(day.nutrition.kcal) }} kcal/pers</template>
             </template>
             <template v-else>—</template>
           </span>
@@ -295,7 +295,7 @@ onMounted(() => {
             <p class="muted">
               {{ menu.dayCost(menu.activeDay).toFixed(2) }} € estimés
               <template v-if="menu.dayNutrition(menu.activeDay).kcal">
-                · {{ Math.round(menu.dayNutrition(menu.activeDay).kcal) }} kcal
+                · {{ Math.round(menu.dayNutrition(menu.activeDay).kcal) }} kcal/pers
                 (P {{ menu.dayNutrition(menu.activeDay).proteines }}g /
                 G {{ menu.dayNutrition(menu.activeDay).glucides }}g /
                 L {{ menu.dayNutrition(menu.activeDay).lipides }}g)

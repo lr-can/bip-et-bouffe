@@ -90,7 +90,12 @@ onMounted(() => {
             <span v-if="recipe.tps"><i class="pi pi-clock" /> {{ recipe.tps }}</span>
             <span v-if="recipe.difficulte"><i class="pi pi-bolt" /> {{ recipe.difficulte }}</span>
             <span v-if="recipe.allergie"><i class="pi pi-exclamation-triangle" /> {{ recipe.allergie }}</span>
-            <span><i class="pi pi-wallet" /> {{ recipe.cout.toFixed(2) }} €</span>
+            <span>
+              <i class="pi pi-wallet" />
+              {{ recipe.cout.toFixed(2) }} €
+              <span class="muted"> ({{ personnes }} pers.)</span>
+              <span class="muted"> · {{ recipe.coutParPers.toFixed(2) }} €/pers</span>
+            </span>
           </p>
           <div v-if="recipe.nutritionParPers?.kcal" class="macros-card">
             <p class="macros-title">
@@ -195,8 +200,8 @@ onMounted(() => {
               <div class="ing-main">
                 <strong>{{ ing.nomIngr }}</strong>
                 <span v-if="ing.nomAllergie" class="ing-allergy">⚠ {{ ing.nomAllergie }}</span>
-                <span v-if="ing.macros?.kcal" class="ing-macros">
-                  {{ Math.round(ing.macros.kcal) }} kcal
+                <span v-if="ing.macrosParPers?.kcal" class="ing-macros">
+                  {{ Math.round(ing.macrosParPers.kcal) }} kcal/pers
                 </span>
               </div>
               <span class="ing-qty">

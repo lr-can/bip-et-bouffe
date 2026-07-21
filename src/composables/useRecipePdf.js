@@ -20,6 +20,23 @@ function formatQty(n) {
   return Number(n).toFixed(2).replace(/\.00$/, '')
 }
 
+/**
+ * jsPDF (Helvetica) ne gère pas bien emojis / certains unicode :
+ * ça produit des rendus cassés du type "&h&e&a&l&t&h&y…".
+ */
+function pdfSafe(value) {
+  return String(value ?? '')
+    .replace(/\u26a0\ufe0f?/g, '!') // ⚠
+    .replace(/[·•▸►]/g, '-')
+    .replace(/[’‘]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/€/g, ' EUR')
+    .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 async function loadLogoDataUrl() {
   try {
     const res = await fetch('/logo.png')
@@ -69,7 +86,6 @@ export async function downloadMenuPdf({
   }
 
   const drawHeader = (full = true) => {
-    // bandeau dégradé simulé (bandes)
     doc.setFillColor(...COLORS.orange)
     doc.rect(0, 0, pageWidth, full ? 92 : 56, 'F')
     doc.setFillColor(...COLORS.rose)
@@ -105,7 +121,7 @@ export async function downloadMenuPdf({
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(8)
     doc.setTextColor(...COLORS.muted)
-    doc.text('Bip & Bouffe — planning entre amis', margin, pageHeight - 20)
+    doc.text('Bip & Bouffe - planning entre amis', margin, pageHeight - 20)
     doc.text(`Page ${page}`, pageWidth - margin, pageHeight - 20, { align: 'right' })
   }
 
@@ -116,7 +132,7 @@ export async function downloadMenuPdf({
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(13)
     doc.setTextColor(...COLORS.navy)
-    doc.text(text, margin + 14, y)
+    doc.text(pdfSafe(text), margin + 14, y)
     y += 22
   }
 
@@ -132,7 +148,7 @@ export async function downloadMenuPdf({
     doc.setFont('helvetica', bold ? 'bold' : 'normal')
     doc.setFontSize(size)
     doc.setTextColor(...color)
-    const lines = doc.splitTextToSize(String(text ?? ''), maxW)
+    const lines = doc.splitTextToSize(pdfSafe(text), maxW)
     ensureSpace(lines.length * (size + 3) + 8)
     doc.text(lines, x, y)
     y += lines.length * (size + 3) + gap - 8
@@ -140,25 +156,25 @@ export async function downloadMenuPdf({
 
   drawHeader(true)
 
-  // carte résumé
   ensureSpace(70)
   doc.setFillColor(...COLORS.soft)
   drawRoundedRect(doc, margin, y, contentWidth, 58, 10, 'F')
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(14)
   doc.setTextColor(...COLORS.navy)
-  doc.text(title, margin + 16, y + 24)
+  doc.text(pdfSafe(title), margin + 16, y + 24)
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(10)
   doc.setTextColor(...COLORS.muted)
   doc.text(
-    `${personnes} personne(s)  ·  ${days?.length || 1} jour(s)  ·  ${totalCost.toFixed(2)} € estimés`,
+    pdfSafe(
+      `${personnes} personne(s)  -  ${days?.length || 1} jour(s)  -  ${Number(totalCost || 0).toFixed(2)} EUR estimes`,
+    ),
     margin + 16,
     y + 42,
   )
   y += 74
 
-  // allergies
   const allergyBits = [
     allergies?.trim(),
     ...(collectedAllergies || []).filter(Boolean),
@@ -172,13 +188,13 @@ export async function downloadMenuPdf({
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(10)
     doc.setTextColor(...COLORS.warnText)
-    doc.text('Allergies à surveiller', margin + 14, y + 18)
+    doc.text('Allergies a surveiller', margin + 14, y + 18)
     doc.setFont('helvetica', 'normal')
     doc.setFontSize(9)
     const allergyLine = allergies?.trim()
-      ? `Éviter : ${allergies.trim()}${collectedAllergies?.length ? `  |  Recettes : ${collectedAllergies.join(', ')}` : ''}`
-      : `Mentionnées dans les recettes : ${uniqueAllergies.join(', ')}`
-    const allergyLines = doc.splitTextToSize(allergyLine, contentWidth - 28)
+      ? `Eviter : ${allergies.trim()}${collectedAllergies?.length ? `  |  Recettes : ${collectedAllergies.join(', ')}` : ''}`
+      : `Mentionnees dans les recettes : ${uniqueAllergies.join(', ')}`
+    const allergyLines = doc.splitTextToSize(pdfSafe(allergyLine), contentWidth - 28)
     doc.text(allergyLines.slice(0, 2), margin + 14, y + 34)
     y += 58
   }
@@ -186,7 +202,9 @@ export async function downloadMenuPdf({
   if (days?.length) {
     sectionTitle('Au menu')
     days.forEach((day, index) => {
-      const blockH = 28 + (day.recipes?.length || 0) * 28 + 12
+      const recipeCount = day.recipes?.length || 0
+      // 2 lignes par recette (titre + meta) pour éviter le chevauchement
+      const blockH = 28 + recipeCount * 36 + 12
       ensureSpace(blockH)
 
       doc.setFillColor(255, 255, 255)
@@ -194,7 +212,6 @@ export async function downloadMenuPdf({
       doc.setLineWidth(1)
       drawRoundedRect(doc, margin, y, contentWidth, blockH - 6, 12, 'FD')
 
-      // accent jour
       const accents = [COLORS.orange, COLORS.turquoise, COLORS.rose, COLORS.mint]
       doc.setFillColor(...accents[index % accents.length])
       drawRoundedRect(doc, margin, y, 8, blockH - 6, 4, 'F')
@@ -207,29 +224,47 @@ export async function downloadMenuPdf({
         doc.setFont('helvetica', 'normal')
         doc.setFontSize(9)
         doc.setTextColor(...COLORS.muted)
-        doc.text(`${day.cost.toFixed(2)} €`, pageWidth - margin - 16, y + 20, { align: 'right' })
+        doc.text(
+          pdfSafe(`${Number(day.cost || 0).toFixed(2)} EUR`),
+          pageWidth - margin - 16,
+          y + 20,
+          { align: 'right' },
+        )
       }
 
-      let rowY = y + 38
+      let rowY = y + 36
       for (const recipe of day.recipes || []) {
         doc.setFillColor(...COLORS.soft)
-        drawRoundedRect(doc, margin + 16, rowY - 12, contentWidth - 32, 22, 6, 'F')
+        drawRoundedRect(doc, margin + 16, rowY - 10, contentWidth - 32, 30, 6, 'F')
+
+        const typeStr = pdfSafe(typeLabel(recipe.type).toUpperCase())
+        const nameStr = pdfSafe(recipe.nomRecette || '-')
+        const meta = pdfSafe(
+          [recipe.mood, recipe.tps, recipe.allergie && `Allergie: ${recipe.allergie}`]
+            .filter(Boolean)
+            .join(' - '),
+        )
+
         doc.setFont('helvetica', 'bold')
-        doc.setFontSize(9)
+        doc.setFontSize(8)
         doc.setTextColor(...COLORS.orange)
-        doc.text(typeLabel(recipe.type).toUpperCase(), margin + 24, rowY + 2)
+        doc.text(typeStr, margin + 24, rowY + 2)
+
         doc.setFont('helvetica', 'bold')
         doc.setTextColor(...COLORS.navy)
         doc.setFontSize(10)
-        doc.text(recipe.nomRecette || '—', margin + 88, rowY + 2)
-        doc.setFont('helvetica', 'normal')
-        doc.setFontSize(8)
-        doc.setTextColor(...COLORS.muted)
-        const meta = [recipe.mood, recipe.tps, recipe.allergie && `⚠ ${recipe.allergie}`]
-          .filter(Boolean)
-          .join(' · ')
-        if (meta) doc.text(meta, pageWidth - margin - 20, rowY + 2, { align: 'right' })
-        rowY += 28
+        const nameMaxW = contentWidth - 120
+        const nameLines = doc.splitTextToSize(nameStr, nameMaxW)
+        doc.text(nameLines[0] || '-', margin + 88, rowY + 2)
+
+        if (meta) {
+          doc.setFont('helvetica', 'normal')
+          doc.setFontSize(8)
+          doc.setTextColor(...COLORS.muted)
+          const metaLines = doc.splitTextToSize(meta, contentWidth - 56)
+          doc.text(metaLines[0] || '', margin + 24, rowY + 14)
+        }
+        rowY += 36
       }
       y += blockH + 8
     })
@@ -237,31 +272,33 @@ export async function downloadMenuPdf({
     sectionTitle('Recette')
     for (const recipe of recipes) {
       ensureSpace(40)
-      bodyText(`${typeLabel(recipe.type)} — ${recipe.nomRecette}`, { size: 12, bold: true, gap: 6 })
+      bodyText(`${typeLabel(recipe.type)} - ${recipe.nomRecette}`, { size: 12, bold: true, gap: 6 })
       bodyText(
         [
           recipe.mood && `Ambiance : ${recipe.mood}`,
-          recipe.difficulte && `Difficulté : ${recipe.difficulte}`,
+          recipe.difficulte && `Difficulte : ${recipe.difficulte}`,
           recipe.tps && `Temps : ${recipe.tps}`,
           recipe.allergie && `Allergies : ${recipe.allergie}`,
-          `Coût : ${(recipe.cout || 0).toFixed(2)} €`,
+          `Cout : ${Number(recipe.cout || 0).toFixed(2)} EUR`,
+          recipe.nutritionParPers?.kcal != null &&
+            `Nutrition / pers : ${Math.round(recipe.nutritionParPers.kcal)} kcal`,
         ]
           .filter(Boolean)
-          .join('  ·  '),
+          .join('  -  '),
         { size: 9, color: COLORS.muted, gap: 10 },
       )
       if (recipe.ingredients?.length) {
-        bodyText('Ingrédients', { size: 10, bold: true, gap: 4 })
+        bodyText('Ingredients', { size: 10, bold: true, gap: 4 })
         for (const ing of recipe.ingredients) {
           bodyText(
-            `• ${ing.nomIngr} — ${formatQty(ing.quantite)} ${ing.unite || ''}`.trim(),
+            `• ${ing.nomIngr} - ${formatQty(ing.quantite)} ${ing.unite || ''}`.trim(),
             { size: 9, gap: 3 },
           )
         }
         y += 6
       }
       if (recipe.etapes?.length) {
-        bodyText('Étapes', { size: 10, bold: true, gap: 4 })
+        bodyText('Etapes', { size: 10, bold: true, gap: 4 })
         recipe.etapes.forEach((etape, i) => {
           bodyText(`${i + 1}. ${etape.texte}`, { size: 9, gap: 4 })
         })
@@ -282,11 +319,11 @@ export async function downloadMenuPdf({
       doc.setFont('helvetica', 'bold')
       doc.setFontSize(10)
       doc.setTextColor(...COLORS.navy)
-      doc.text(item.nomIngr, margin + 10, y)
+      doc.text(pdfSafe(item.nomIngr), margin + 10, y)
       doc.setFont('helvetica', 'normal')
       doc.setTextColor(...COLORS.muted)
       doc.text(
-        `${formatQty(item.quantite)} ${item.unite || ''}`.trim(),
+        pdfSafe(`${formatQty(item.quantite)} ${item.unite || ''}`.trim()),
         pageWidth - margin - 10,
         y,
         { align: 'right' },

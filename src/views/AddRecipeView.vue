@@ -22,6 +22,7 @@ import {
   defaultRecipeQty,
   convertQty,
   canonicalUnit,
+  costForQuantity,
 } from '@/utils/nutrition'
 
 const UNIT_OPTIONS = [
@@ -171,6 +172,10 @@ const recipeMacrosPreview = computed(() => {
   )
   const n = Number(form.nbPerso) || 1
   const r = (v) => Math.round(v * 10) / 10
+  const costPerPerson = links.value.reduce((sum, l) => {
+    const catalog = recipes.ingredientsMap[l.idIngr] || l
+    return sum + costForQuantity(catalog, Number(l.qteParPersonne) || 0, l.unite)
+  }, 0)
   return {
     perPerson: {
       kcal: r(perPerson.kcal),
@@ -184,6 +189,8 @@ const recipeMacrosPreview = computed(() => {
       glucides: r(perPerson.glucides * n),
       lipides: r(perPerson.lipides * n),
     },
+    coutParPers: Math.round(costPerPerson * 100) / 100,
+    coutTotal: Math.round(costPerPerson * n * 100) / 100,
   }
 })
 
@@ -858,7 +865,7 @@ onMounted(bootstrap)
         </div>
 
         <div v-if="links.length" class="nutrition-preview recipe-macros">
-          <strong>Estimation nutrition</strong>
+          <strong>Estimation nutrition & coût</strong>
           <div class="preview-block">
             <span class="preview-label">
               <i class="pi pi-user" />
@@ -873,6 +880,10 @@ onMounted(bootstrap)
               >
                 <i class="pi" :class="badge.icon" />
                 {{ badge.label }}
+              </span>
+              <span class="macro-chip macro-chip--cost">
+                <i class="pi pi-wallet" />
+                {{ recipeMacrosPreview.coutParPers.toFixed(2) }} €
               </span>
             </div>
           </div>
@@ -890,6 +901,10 @@ onMounted(bootstrap)
               >
                 <i class="pi" :class="badge.icon" />
                 {{ badge.label }}
+              </span>
+              <span class="macro-chip macro-chip--cost">
+                <i class="pi pi-wallet" />
+                {{ recipeMacrosPreview.coutTotal.toFixed(2) }} €
               </span>
             </div>
           </div>
@@ -1365,6 +1380,11 @@ h1 {
 .macro-chip--purple {
   background: color-mix(in srgb, #8b5cf6 16%, transparent);
   color: #6d28d9;
+}
+
+.macro-chip--cost {
+  background: color-mix(in srgb, var(--cm-turquoise, #2dd4bf) 16%, transparent);
+  color: color-mix(in srgb, var(--cm-turquoise, #0f766e) 80%, #111827);
 }
 
 .preview-block {
