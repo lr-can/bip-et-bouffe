@@ -9,7 +9,7 @@ import {
   ensureHeaders,
   seedAllergenesIfEmpty,
   seedSubstitutionsIfEmpty,
-  seedProverbesIfEmpty,
+  syncProverbes,
   appendRows,
   readSheetObjects,
   rewriteSheet,
@@ -104,7 +104,9 @@ export async function handleApi(req) {
       }
       const allergenes = await seedAllergenesIfEmpty(sheets)
       const substitutions = await seedSubstitutionsIfEmpty(sheets)
-      const proverbes = await seedProverbesIfEmpty(sheets)
+      // Toujours resynchroniser proverbes (auteurs / textes à jour)
+      await ensureHeaders(sheets, SHEETS.proverbes)
+      const proverbes = await syncProverbes(sheets)
       return json({ ok: true, schema: SHEETS, allergenes, substitutions, proverbes })
     }
 

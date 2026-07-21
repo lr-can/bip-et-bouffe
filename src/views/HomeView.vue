@@ -59,16 +59,21 @@ onMounted(() => {
       <div class="hero-brand cm-rise">
         <img src="/logo.png" alt="Bip & Bouffe" class="hero-logo" width="160" height="160" />
         <p class="hero-kicker">Le proverbe du jour</p>
-        <h1 v-if="proverbe" class="cm-display hero-title hero-title--proverb">
-          <span class="cm-grad-text">« {{ proverbe }} »</span>
-        </h1>
-        <h1 v-else class="cm-display hero-title">
-          Entre potes,<br />
-          <span class="cm-grad-text">autour de la table</span>
-        </h1>
-        <p v-if="!proverbe" class="lede">
-          Trouve une idée, planifie la semaine, partage la liste de courses.
-        </p>
+        <template v-if="proverbe">
+          <h1 class="cm-display hero-title hero-title--proverb">
+            <span class="cm-grad-text">« {{ proverbe.texte }} »</span>
+          </h1>
+          <p v-if="proverbe.auteur" class="proverb-author">— {{ proverbe.auteur }}</p>
+        </template>
+        <template v-else>
+          <h1 class="cm-display hero-title">
+            Entre potes,<br />
+            <span class="cm-grad-text">autour de la table</span>
+          </h1>
+          <p class="lede">
+            Trouve une idée, planifie la semaine, partage la liste de courses.
+          </p>
+        </template>
 
         <div class="hero-actions">
           <Button
@@ -201,8 +206,16 @@ onMounted(() => {
 .hero-title--proverb {
   font-size: clamp(1.6rem, 5.2vw, 2.6rem);
   line-height: 1.25;
-  margin-bottom: 1.4rem;
+  margin-bottom: 0.55rem;
   max-width: 34rem;
+}
+
+.proverb-author {
+  margin: 0 0 1.4rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-style: italic;
+  color: var(--cm-muted);
 }
 
 .lede {

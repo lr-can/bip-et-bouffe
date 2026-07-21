@@ -72,7 +72,7 @@ export const SHEETS = {
   },
   proverbes: {
     name: 'proverbes',
-    columns: ['idProverbe', 'jour', 'texte'],
+    columns: ['idProverbe', 'jour', 'texte', 'auteur'],
     idField: 'idProverbe',
   },
 }
@@ -423,13 +423,27 @@ export async function seedProverbesIfEmpty(sheets) {
   const { rows } = await readSheetObjects(sheets, 'proverbes')
   if (rows.length > 0) return { seeded: false, count: rows.length }
   const { PROVERBS } = await import('./proverbs.js')
-  const objects = PROVERBS.map((texte, i) => ({
+  const objects = PROVERBS.map((entry, i) => ({
     idProverbe: `prov-${String(i + 1).padStart(3, '0')}`,
     jour: String(i + 1),
-    texte,
+    texte: entry.texte,
+    auteur: entry.auteur || '',
   }))
   await appendRows(sheets, 'proverbes', objects)
   return { seeded: true, count: objects.length }
+}
+
+/** Réécrit toute la feuille proverbes (texte + auteur) depuis le seed local. */
+export async function syncProverbes(sheets) {
+  const { PROVERBS } = await import('./proverbs.js')
+  const objects = PROVERBS.map((entry, i) => ({
+    idProverbe: `prov-${String(i + 1).padStart(3, '0')}`,
+    jour: String(i + 1),
+    texte: entry.texte,
+    auteur: entry.auteur || '',
+  }))
+  await rewriteSheet(sheets, 'proverbes', objects)
+  return { synced: true, count: objects.length }
 }
 
 export async function deleteRecipeById(sheets, idRecette) {

@@ -45,11 +45,16 @@ export const useSheetsStore = defineStore('sheets', {
      */
     proverbeDuJour(state) {
       const list = state.data.proverbes || []
-      if (!list.length) return ''
+      if (!list.length) return null
       const now = new Date()
       const jour = DAYS_BEFORE_MONTH[now.getMonth()] + now.getDate()
       const found = list.find((p) => Number(p.jour) === jour)
-      return (found || list[(jour - 1) % list.length])?.texte || ''
+      const row = found || list[(jour - 1) % list.length]
+      if (!row?.texte) return null
+      return {
+        texte: row.texte,
+        auteur: row.auteur || '',
+      }
     },
   },
 
