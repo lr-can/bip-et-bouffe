@@ -19,7 +19,20 @@ import {
   macrosForQuantity,
   formatMacros,
   defaultQtyForUnit,
+  convertQty,
 } from '@/utils/nutrition'
+
+const UNIT_OPTIONS = [
+  { label: 'g', value: 'g' },
+  { label: 'kg', value: 'kg' },
+  { label: 'mg', value: 'mg' },
+  { label: 'L', value: 'l' },
+  { label: 'cL', value: 'cl' },
+  { label: 'mL', value: 'ml' },
+  { label: 'pièce', value: 'pièce' },
+  { label: 'CàS', value: 'CàS' },
+  { label: 'Càc', value: 'Càc' },
+]
 
 const sheets = useSheetsStore()
 const recipes = useRecipesStore()
@@ -155,21 +168,45 @@ const recipeMacrosPreview = computed(() => {
     { kcal: 0, proteines: 0, glucides: 0, lipides: 0 },
   )
   const n = Number(form.nbPerso) || 1
+  const r = (v) => Math.round(v * 10) / 10
   return {
     perPerson: {
-      kcal: Math.round(perPerson.kcal * 10) / 10,
-      proteines: Math.round(perPerson.proteines * 10) / 10,
-      glucides: Math.round(perPerson.glucides * 10) / 10,
-      lipides: Math.round(perPerson.lipides * 10) / 10,
+      kcal: r(perPerson.kcal),
+      proteines: r(perPerson.proteines),
+      glucides: r(perPerson.glucides),
+      lipides: r(perPerson.lipides),
     },
     total: {
-      kcal: Math.round(perPerson.kcal * n * 10) / 10,
-      proteines: Math.round(perPerson.proteines * n * 10) / 10,
-      glucides: Math.round(perPerson.glucides * n * 10) / 10,
-      lipides: Math.round(perPerson.lipides * n * 10) / 10,
+      kcal: r(perPerson.kcal * n),
+      proteines: r(perPerson.proteines * n),
+      glucides: r(perPerson.glucides * n),
+      lipides: r(perPerson.lipides * n),
     },
   }
 })
+
+/** qteTotal = quantité saisie pour nbPerso personnes → retourne qteParPersonne */
+function totalToPerPers(total) {
+  const n = Number(form.nbPerso) || 1
+  return Math.round((total / n) * 1000) / 1000
+}
+
+function perPersToTotal(link) {
+  const n = Number(form.nbPerso) || 1
+  return Math.round(Number(link.qteParPersonne) * n * 1000) / 1000
+}
+
+function onTotalChange(link, newTotal) {
+  link.qteParPersonne = totalToPerPers(newTotal)
+}
+
+function changeUnit(link, newUnit) {
+  const converted = convertQty(link.qteParPersonne, link.unite, newUnit, link.nomIngr)
+  link.unite = newUnit
+  if (converted !== null) {
+    link.qteParPersonne = converted
+  }
+}
 
 const suggestions = computed(() => {
   const selected = new Set(links.value.map((l) => l.idIngr))
@@ -718,13 +755,15 @@ onMounted(bootstrap)
           </div>
         </div>
 
+        <p class="hint" style="margin-bottom:0.2rem">
+          Saisir les quantités <strong>pour {{ form.nbPerso }} personne{{ form.nbPerso > 1 ? 's' : '' }}</strong> — la quantité par personne est calculée automatiquement.
+        </p>
         <div class="links">
           <div v-for="link in links" :key="link.idIngr" class="link-row">
-            <div>
+            <div class="link-info">
               <strong>{{ link.nomIngr }}</strong>
               <span class="muted">
-                {{ link.unite }}
-                <template v-if="link.categorie"> · {{ link.categorie }}</template>
+                <template v-if="link.categorie">{{ link.categorie }}</template>
                 <template v-if="link.nomAllergie"> · ⚠ {{ link.nomAllergie }}</template>
               </span>
               <span class="ing-macros">
@@ -734,19 +773,27 @@ onMounted(bootstrap)
             </div>
             <div class="link-actions">
               <InputNumber
-                v-model="link.qteParPersonne"
+                :modelValue="perPersToTotal(link)"
                 :min="0"
                 :minFractionDigits="0"
                 :maxFractionDigits="3"
-                :step="link.unite === 'kg' || link.unite === 'l' ? 0.05 : 1"
-                placeholder="qté/pers"
+                :step="['kg','l','cl'].includes(link.unite) ? 0.05 : 1"
+                :placeholder="`${form.nbPerso} pers.`"
                 class="qty-input"
+                @update:modelValue="(v) => onTotalChange(link, v)"
               />
-              <span class="qty-unit">{{ link.unite }}</span>
+              <Select
+                :modelValue="link.unite"
+                :options="UNIT_OPTIONS"
+                optionLabel="label"
+                optionValue="value"
+                class="unit-select"
+                @update:modelValue="(v) => changeUnit(link, v)"
+              />
               <Button icon="pi pi-trash" rounded text severity="danger" @click="removeLink(link.idIngr)" />
             </div>
           </div>
-          <p v-if="!links.length" class="empty-links">Aucun ingrédient pour l’instant.</p>
+          <p v-if="!links.length" class="empty-links">Aucun ingrédient pour l'instant.</p>
         </div>
 
         <div v-if="links.length" class="nutrition-preview recipe-macros">
@@ -793,8 +840,7 @@ onMounted(bootstrap)
             </div>
             <div class="field">
               <label>Unité</label>
-              <InputText v-model="newIngredient.unite" fluid placeholder="g, kg, l, pièce…" />
-            </div>
+              <Select v-model="newIngredient.unite" :options="UNIT_OPTIONS" optionLabel="label" optionValue="value" editable fluid placeholder="g, kg, CàS…" />            </div>
             <div class="field">
               <label>Prix unitaire</label>
               <InputNumber
@@ -1117,6 +1163,22 @@ h1 {
   font-size: 0.82rem;
   color: var(--cm-muted);
   min-width: 1.5rem;
+}
+
+.unit-select {
+  width: 6rem;
+  flex-shrink: 0;
+}
+
+.unit-select :deep(.p-select) {
+  width: 100%;
+}
+
+.link-info {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 0.1rem;
 }
 
 .recipe-macros {

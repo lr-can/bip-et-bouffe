@@ -66,17 +66,58 @@ onMounted(() => {
             <span v-if="recipe.difficulte"><i class="pi pi-bolt" /> {{ recipe.difficulte }}</span>
             <span v-if="recipe.allergie"><i class="pi pi-exclamation-triangle" /> {{ recipe.allergie }}</span>
             <span><i class="pi pi-wallet" /> {{ recipe.cout.toFixed(2) }} €</span>
-            <span v-if="recipe.nutrition?.kcal">
-              <i class="pi pi-chart-bar" />
-              {{ Math.round(recipe.nutritionParPers.kcal) }} kcal/pers
-            </span>
           </p>
-          <div v-if="recipe.nutrition?.kcal" class="macros-bar">
-            <span class="macro"><strong>{{ Math.round(recipe.nutrition.kcal) }}</strong> kcal</span>
-            <span class="macro"><strong>{{ recipe.nutrition.proteines }}</strong> g prot.</span>
-            <span class="macro"><strong>{{ recipe.nutrition.glucides }}</strong> g gluc.</span>
-            <span class="macro"><strong>{{ recipe.nutrition.lipides }}</strong> g lip.</span>
-            <span class="macro muted">total pour {{ recipe.personnes }} pers.</span>
+          <div v-if="recipe.nutritionParPers?.kcal" class="macros-card">
+            <p class="macros-title">
+              Nutrition <strong>par personne</strong>
+              <span class="muted">({{ personnes }} pers. · AJR recommandés)</span>
+            </p>
+            <div class="macros-bars">
+              <div class="macro-row">
+                <span class="macro-label">Calories</span>
+                <div class="macro-track">
+                  <div
+                    class="macro-fill macro-fill--kcal"
+                    :style="{ width: Math.min(100, recipe.nutritionParPers.kcal / 20) + '%' }"
+                  />
+                </div>
+                <span class="macro-val">{{ Math.round(recipe.nutritionParPers.kcal) }} kcal</span>
+                <span class="macro-ajr">/ 2000</span>
+              </div>
+              <div class="macro-row">
+                <span class="macro-label">Protéines</span>
+                <div class="macro-track">
+                  <div
+                    class="macro-fill macro-fill--prot"
+                    :style="{ width: Math.min(100, recipe.nutritionParPers.proteines / 0.5) + '%' }"
+                  />
+                </div>
+                <span class="macro-val">{{ recipe.nutritionParPers.proteines }} g</span>
+                <span class="macro-ajr">/ 50 g</span>
+              </div>
+              <div class="macro-row">
+                <span class="macro-label">Glucides</span>
+                <div class="macro-track">
+                  <div
+                    class="macro-fill macro-fill--gluc"
+                    :style="{ width: Math.min(100, recipe.nutritionParPers.glucides / 2.6) + '%' }"
+                  />
+                </div>
+                <span class="macro-val">{{ recipe.nutritionParPers.glucides }} g</span>
+                <span class="macro-ajr">/ 260 g</span>
+              </div>
+              <div class="macro-row">
+                <span class="macro-label">Lipides</span>
+                <div class="macro-track">
+                  <div
+                    class="macro-fill macro-fill--lip"
+                    :style="{ width: Math.min(100, recipe.nutritionParPers.lipides / 0.7) + '%' }"
+                  />
+                </div>
+                <span class="macro-val">{{ recipe.nutritionParPers.lipides }} g</span>
+                <span class="macro-ajr">/ 70 g</span>
+              </div>
+            </div>
           </div>
         </div>
         <div class="actions">
@@ -198,25 +239,86 @@ h1 {
   gap: 0.3rem;
 }
 
-.macros-bar {
+.macros-card {
+  margin-top: 0.9rem;
+  padding: 0.85rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--cm-border);
+  background: color-mix(in srgb, var(--cm-bg) 40%, transparent);
+}
+
+.macros-title {
+  margin: 0 0 0.7rem;
+  font-size: 0.88rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.65rem 1rem;
-  margin-top: 0.85rem;
-  padding: 0.7rem 0.9rem;
-  border-radius: 0.85rem;
-  background: color-mix(in srgb, var(--cm-bg) 40%, transparent);
-  border: 1px solid var(--cm-border);
-  font-size: 0.92rem;
+  gap: 0.3rem 0.5rem;
+  align-items: baseline;
 }
 
-.macros-bar .macro strong {
+.macros-title .muted {
+  font-size: 0.78rem;
+}
+
+.macros-bars {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.macro-row {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.macro-label {
+  font-weight: 600;
+  color: var(--cm-text);
+  white-space: nowrap;
+}
+
+.macro-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cm-border) 80%, transparent);
+  overflow: hidden;
+}
+
+.macro-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.macro-fill--kcal {
+  background: linear-gradient(90deg, var(--cm-orange, #f97316), #fbbf24);
+}
+
+.macro-fill--prot {
+  background: linear-gradient(90deg, #6366f1, #a78bfa);
+}
+
+.macro-fill--gluc {
+  background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.macro-fill--lip {
+  background: linear-gradient(90deg, var(--cm-turquoise, #2dd4bf), #22d3ee);
+}
+
+.macro-val {
   font-weight: 700;
+  white-space: nowrap;
+  min-width: 4rem;
+  text-align: right;
 }
 
-.macros-bar .muted {
+.macro-ajr {
   color: var(--cm-muted);
-  font-size: 0.82rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
 }
 
 .ing-macros {
