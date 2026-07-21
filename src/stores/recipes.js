@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { useSheetsStore } from '@/stores/sheets'
 import { fuzzyMatch, toNumber } from '@/utils/recipe'
-import { macrosForQuantity, sumMacros, isCatalogIngredient } from '@/utils/nutrition'
+import { canonicalUnit, macrosForQuantity, sumMacros, isCatalogIngredient } from '@/utils/nutrition'
 
 export const useRecipesStore = defineStore('recipes', {
   getters: {
@@ -70,6 +70,41 @@ export const useRecipesStore = defineStore('recipes', {
       }
     },
 
+    substitutions() {
+      const sheets = useSheetsStore()
+      return (sheets.data.substitutionsAllergenes || []).slice()
+    },
+
+    substitutionsByAllergen() {
+      const grouped = new Map()
+      for (const row of this.substitutions) {
+        const key = String(row.idAllergie || '').trim()
+        if (!key) continue
+        if (!grouped.has(key)) grouped.set(key, [])
+        grouped.get(key).push(row)
+      }
+      return grouped
+    },
+
+    ingredientSubstitutions() {
+      return (ingredient, selectedAllergenIds = []) => {
+        if (!ingredient || !selectedAllergenIds.length) return []
+        const name = String(ingredient.nomIngr || '').toLowerCase()
+        const rows = selectedAllergenIds.flatMap(
+          (id) => this.substitutionsByAllergen.get(id) || [],
+        )
+        return rows.filter((row) => {
+          const pattern = String(row.ingredientPattern || '').trim()
+          if (!pattern) return false
+          try {
+            return new RegExp(pattern, 'i').test(name)
+          } catch {
+            return name.includes(pattern.toLowerCase())
+          }
+        })
+      },
+    },
+
     moods() {
       const set = new Set(
         this.all.map((r) => String(r.mood || '').trim()).filter(Boolean),
@@ -101,12 +136,14 @@ export const useRecipesStore = defineStore('recipes', {
             idAllergie: '',
           }
           const qteParPersonne = toNumber(link.qteParPersonne, 0)
+          const unite = canonicalUnit(link.unite || base.unite || 'g')
           const quantite = qteParPersonne * nb
           const prixUnitaire = toNumber(base.prixUnitaire, 0)
           const nomAllergie = this.allergenName(base.idAllergie)
-          const macros = macrosForQuantity(base, quantite)
+          const macros = macrosForQuantity({ ...base, unite }, quantite)
           return {
             ...base,
+            unite,
             nomAllergie,
             qteParPersonne,
             quantite,
@@ -137,6 +174,13 @@ export const useRecipesStore = defineStore('recipes', {
           .map((s) => s.trim())
           .filter(Boolean)
         const allergiesDetectees = [...new Set([...fromRecipe, ...fromIngredients])]
+        const allergieIdsDetectes = [
+          ...new Set(
+            ingredients
+              .map((i) => i.idAllergie)
+              .filter(Boolean),
+          ),
+        ]
 
         return {
           ...recipe,
@@ -147,6 +191,7 @@ export const useRecipesStore = defineStore('recipes', {
           nutrition,
           nutritionParPers,
           allergiesDetectees,
+          allergieIdsDetectes,
         }
       }
     },

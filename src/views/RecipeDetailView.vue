@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import InputNumber from 'primevue/inputnumber'
+import MultiSelect from 'primevue/multiselect'
 import ProgressSpinner from 'primevue/progressspinner'
 import Message from 'primevue/message'
 import Tag from 'primevue/tag'
@@ -19,14 +20,38 @@ const sheets = useSheetsStore()
 const recipes = useRecipesStore()
 const router = useRouter()
 const personnes = ref(2)
+const selectedAdaptationIds = ref([])
 
 const recipe = computed(() => recipes.enriched(props.id, personnes.value))
+const allergenAdaptationOptions = computed(() =>
+  recipes.allergenOptions.map((a) => ({
+    label: a.nomAllergie,
+    value: a.idAllergie,
+  })),
+)
+const recipeSubstitutionPreview = computed(() => {
+  if (!recipe.value || !selectedAdaptationIds.value.length) return []
+  return recipe.value.ingredients
+    .map((ing) => {
+      const substitutions = recipes.ingredientSubstitutions(ing, selectedAdaptationIds.value)
+      if (!substitutions.length) return null
+      return {
+        ingredient: ing,
+        substitutions: substitutions.map((row) => ({
+          ...row,
+          allergenName: recipes.allergenName(row.idAllergie),
+        })),
+      }
+    })
+    .filter(Boolean)
+})
 
 watch(
   () => props.id,
   () => {
     const base = recipes.byId(props.id)
     personnes.value = toNumber(base?.nbPerso, 2) || 2
+    selectedAdaptationIds.value = []
   },
   { immediate: true },
 )
@@ -148,6 +173,22 @@ onMounted(() => {
             <h2 class="cm-display">Ingrédients</h2>
             <span class="panel-count">{{ recipe.ingredients.length }}</span>
           </div>
+          <div class="adapt-box">
+            <label>Adapter la recette pour…</label>
+            <MultiSelect
+              v-model="selectedAdaptationIds"
+              :options="allergenAdaptationOptions"
+              optionLabel="label"
+              optionValue="value"
+              placeholder="Ex. sans lactose, sans œuf…"
+              display="chip"
+              filter
+              showClear
+            />
+            <p class="adapt-hint">
+              Sélectionne un allergène pour afficher les remplacements conseillés ingrédient par ingrédient.
+            </p>
+          </div>
           <ul class="ing-list">
             <li v-for="ing in recipe.ingredients" :key="ing.idIngr" class="ing-item">
               <span class="ing-dot" aria-hidden="true" />
@@ -164,6 +205,36 @@ onMounted(() => {
               </span>
             </li>
           </ul>
+          <div v-if="selectedAdaptationIds.length" class="subs-panel">
+            <p class="subs-title">
+              <i class="pi pi-sparkles" />
+              Remplacements proposés
+            </p>
+            <ul v-if="recipeSubstitutionPreview.length" class="subs-list">
+              <li v-for="row in recipeSubstitutionPreview" :key="row.ingredient.idIngr" class="subs-item">
+                <div class="subs-item-head">
+                  <strong>{{ row.ingredient.nomIngr }}</strong>
+                  <span class="subs-qty">
+                    {{ Number.isInteger(row.ingredient.quantite) ? row.ingredient.quantite : row.ingredient.quantite.toFixed(2) }}
+                    {{ row.ingredient.unite }}
+                  </span>
+                </div>
+                <div class="subs-chips">
+                  <span
+                    v-for="sub in row.substitutions"
+                    :key="sub.idSubstitution"
+                    class="subs-chip"
+                  >
+                    <i class="pi pi-refresh" />
+                    <span class="subs-chip-allergen">{{ sub.allergenName }}</span>
+                    <span>{{ sub.ingredientSubstitut }}</span>
+                    <small v-if="sub.notes">{{ sub.notes }}</small>
+                  </span>
+                </div>
+              </li>
+            </ul>
+            <p v-else class="empty">Aucun substitut enregistré pour les ingrédients de cette recette.</p>
+          </div>
           <p v-if="!recipe.ingredients.length" class="empty">Aucun ingrédient lié.</p>
         </section>
 
@@ -390,6 +461,23 @@ h1 {
   color: #0b1220;
 }
 
+.adapt-box {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+}
+
+.adapt-box label {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.adapt-hint {
+  margin: 0;
+  color: var(--cm-muted);
+  font-size: 0.8rem;
+}
+
 .ing-list {
   list-style: none;
   margin: 0;
@@ -429,6 +517,81 @@ h1 {
   font-size: 0.78rem;
   font-weight: 600;
   color: color-mix(in srgb, #b45309 80%, var(--cm-text));
+}
+
+.subs-panel {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px dashed var(--cm-border);
+  display: grid;
+  gap: 0.8rem;
+}
+
+.subs-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 800;
+}
+
+.subs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.subs-item {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--cm-border);
+  background: color-mix(in srgb, var(--cm-bg) 58%, transparent);
+}
+
+.subs-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.subs-qty {
+  color: var(--cm-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.subs-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.subs-chip {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cm-turquoise) 14%, transparent);
+  color: var(--cm-text);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.subs-chip small {
+  font-weight: 500;
+  color: var(--cm-muted);
+}
+
+.subs-chip-allergen {
+  color: color-mix(in srgb, var(--cm-orange) 85%, #374151);
 }
 
 .ing-qty {
@@ -552,6 +715,11 @@ h1 {
 
   .panels {
     display: grid;
+  }
+
+  .subs-item-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 </style>

@@ -42,12 +42,28 @@ function pieceWeightGrams(name) {
   return 100
 }
 
-function normalizeUnit(unite) {
+export function normalizeUnit(unite) {
   return String(unite || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .trim()
+}
+
+/** Ramène une unité libre vers une unité canonique de l'app. */
+export function canonicalUnit(unite) {
+  const u = normalizeUnit(unite)
+  if (!u) return 'g'
+  if (/^(g|gr|gramme|grammes)$/.test(u)) return 'g'
+  if (/^(kg|kilo)/.test(u)) return 'kg'
+  if (/^mg/.test(u)) return 'mg'
+  if (/^(ml|millilitre)/.test(u)) return 'ml'
+  if (/^(cl|centilitre)/.test(u)) return 'cl'
+  if (/^(l|litre)$/.test(u)) return 'l'
+  if (/^(c\.?a\.?s|cas|cuillere.?a.?soupe)/.test(u)) return 'CàS'
+  if (/^(c\.?a\.?c|cac|cuillere.?a.?cafe)/.test(u)) return 'Càc'
+  if (/^(pce|pcs|piece|pi[eè]ce|unit[eé])/.test(u)) return 'pièce'
+  return unite || 'g'
 }
 
 /** Quantité → grammes (base des macros kcal100). */
@@ -72,8 +88,26 @@ function round1(n) {
   return Math.round(Number(n) * 10) / 10
 }
 
+function gramsToQuantity(grams, unite, nomIngr = '') {
+  const u = normalizeUnit(unite)
+  if (!u || /^(g|gr|gramme|grammes)$/.test(u)) return round1(grams)
+  if (/^(kg|kilo)/.test(u)) return round1(grams / 1000)
+  if (/^mg/.test(u)) return round1(grams * 1000)
+  if (/^(ml|millilitre)/.test(u)) return round1(grams)
+  if (/^(cl|centilitre)/.test(u)) return round1(grams / 10)
+  if (/^(l|litre)$/.test(u)) return round1(grams / 1000)
+  if (/^(c\.?a\.?s|cas|cuillere.?a.?soupe)/.test(u)) return round1(grams / 15)
+  if (/^(c\.?a\.?c|cac|cuillere.?a.?cafe)/.test(u)) return round1(grams / 5)
+  if (/^(pce|pcs|piece|pi[eè]ce|unit[eé])/.test(u)) {
+    const piece = pieceWeightGrams(nomIngr)
+    return piece ? round1(grams / piece) : null
+  }
+  return null
+}
+
 export function macrosForQuantity(ingredient, quantite) {
-  const grams = quantityToGrams(quantite, ingredient.unite, ingredient.nomIngr)
+  const unite = canonicalUnit(ingredient.unite)
+  const grams = quantityToGrams(quantite, unite, ingredient.nomIngr)
   const factor = grams / 100
   return {
     grams: round1(grams),
@@ -104,7 +138,7 @@ export function formatMacros(m) {
 
 /** Quantité par défaut selon l'unité (évite 1 kg/pers par erreur). */
 export function defaultQtyForUnit(unite) {
-  const u = normalizeUnit(unite)
+  const u = normalizeUnit(canonicalUnit(unite))
   if (/^(kg|kilo)/.test(u)) return 0.1
   if (/^(l|litre)$/.test(u) || u === 'l') return 0.1
   if (/^(cl|centilitre)/.test(u)) return 10
@@ -117,22 +151,36 @@ export function defaultQtyForUnit(unite) {
 }
 
 /**
+ * Quantité initiale pour la recette : préfère g/ml pour les petites quantités kg/L.
+ */
+export function defaultRecipeQty(unite, nomIngr = '') {
+  const catalogUnit = canonicalUnit(unite)
+  const perPerson = defaultQtyForUnit(catalogUnit)
+  if (catalogUnit === 'kg' && perPerson < 1) {
+    return {
+      unite: 'g',
+      qteParPersonne: convertQty(perPerson, 'kg', 'g', nomIngr) ?? perPerson * 1000,
+    }
+  }
+  if (catalogUnit === 'l' && perPerson < 1) {
+    return {
+      unite: 'ml',
+      qteParPersonne: convertQty(perPerson, 'l', 'ml', nomIngr) ?? perPerson * 1000,
+    }
+  }
+  return { unite: catalogUnit, qteParPersonne: perPerson }
+}
+
+/**
  * Convertit une quantité d'une unité source vers une unité cible.
- * Retourne null si la conversion est impossible (ex. g → pièce).
+ * Retourne null si la conversion est impossible.
  */
 export function convertQty(qty, fromUnit, toUnit, nomIngr = '') {
-  if (fromUnit === toUnit) return toNumber(qty, 0)
-  const fromG = quantityToGrams(qty, fromUnit, nomIngr)
-  const u = normalizeUnit(toUnit)
-  if (!u || /^(g|gr|gramme|grammes)$/.test(u)) return round1(fromG)
-  if (/^(kg|kilo)/.test(u)) return round1(fromG / 1000)
-  if (/^mg/.test(u)) return round1(fromG * 1000)
-  if (/^(ml|millilitre)/.test(u)) return round1(fromG)
-  if (/^(cl|centilitre)/.test(u)) return round1(fromG / 10)
-  if (/^(l|litre)$/.test(u)) return round1(fromG / 1000)
-  if (/^(c\.?a\.?s|cas|cuillere.?a.?soupe)/.test(u)) return round1(fromG / 15)
-  if (/^(c\.?a\.?c|cac|cuillere.?a.?cafe)/.test(u)) return round1(fromG / 5)
-  return null
+  const from = canonicalUnit(fromUnit)
+  const to = canonicalUnit(toUnit)
+  if (from === to) return round1(toNumber(qty, 0))
+  const fromG = quantityToGrams(qty, from, nomIngr)
+  return gramsToQuantity(fromG, to, nomIngr)
 }
 
 export function isCatalogIngredient(ing) {

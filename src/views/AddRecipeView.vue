@@ -19,7 +19,9 @@ import {
   macrosForQuantity,
   formatMacros,
   defaultQtyForUnit,
+  defaultRecipeQty,
   convertQty,
+  canonicalUnit,
 } from '@/utils/nutrition'
 
 const UNIT_OPTIONS = [
@@ -196,16 +198,31 @@ function perPersToTotal(link) {
   return Math.round(Number(link.qteParPersonne) * n * 1000) / 1000
 }
 
+function qtyStepForUnit(unite) {
+  const u = canonicalUnit(unite)
+  return ['kg', 'l', 'cl'].includes(u) ? 0.05 : 1
+}
+
 function onTotalChange(link, newTotal) {
   link.qteParPersonne = totalToPerPers(newTotal)
 }
 
 function changeUnit(link, newUnit) {
-  const converted = convertQty(link.qteParPersonne, link.unite, newUnit, link.nomIngr)
-  link.unite = newUnit
-  if (converted !== null) {
-    link.qteParPersonne = converted
+  const target = canonicalUnit(newUnit)
+  const current = canonicalUnit(link.unite)
+  if (target === current) return
+  const converted = convertQty(link.qteParPersonne, current, target, link.nomIngr)
+  if (converted === null) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Conversion impossible',
+      detail: `Impossible de convertir ${current} → ${target} pour cet ingrédient.`,
+      life: 3000,
+    })
+    return
   }
+  link.unite = target
+  link.qteParPersonne = converted
 }
 
 const suggestions = computed(() => {
@@ -295,10 +312,11 @@ function searchIngredients(event) {
 function addExistingIngredient(ing) {
   if (!ing?.idIngr) return
   if (links.value.some((l) => l.idIngr === ing.idIngr)) return
+  const initial = defaultRecipeQty(ing.unite, ing.nomIngr)
   links.value.push({
     idIngr: ing.idIngr,
     nomIngr: ing.nomIngr,
-    unite: ing.unite,
+    unite: initial.unite,
     categorie: ing.categorie || '',
     idAllergie: ing.idAllergie || '',
     nomAllergie: recipes.allergenName(ing.idAllergie),
@@ -307,7 +325,7 @@ function addExistingIngredient(ing) {
     glucides100: ing.glucides100 || '',
     lipides100: ing.lipides100 || '',
     nutritionSource: ing.nutritionSource || '',
-    qteParPersonne: defaultQtyForUnit(ing.unite),
+    qteParPersonne: initial.qteParPersonne,
     isNew: false,
   })
   ingredientQuery.value = null
@@ -491,6 +509,7 @@ async function submit() {
     idIngr: l.idIngr,
     idRecette,
     qteParPersonne: String(l.qteParPersonne ?? 0),
+    unite: canonicalUnit(l.unite) || 'g',
   }))
 
   const payloadSteps = stepsList.value
@@ -557,7 +576,7 @@ function loadRecipeForEdit(id) {
   links.value = (enriched.ingredients || []).map((ing) => ({
     idIngr: ing.idIngr,
     nomIngr: ing.nomIngr,
-    unite: ing.unite,
+    unite: canonicalUnit(ing.unite),
     categorie: ing.categorie || '',
     idAllergie: ing.idAllergie || '',
     nomAllergie: ing.nomAllergie || recipes.allergenName(ing.idAllergie),
@@ -813,17 +832,19 @@ onMounted(bootstrap)
             </div>
             <div class="link-actions">
               <InputNumber
+                :key="`${link.idIngr}-${link.unite}`"
                 :modelValue="perPersToTotal(link)"
                 :min="0"
                 :minFractionDigits="0"
                 :maxFractionDigits="3"
-                :step="['kg','l','cl'].includes(link.unite) ? 0.05 : 1"
+                :step="qtyStepForUnit(link.unite)"
                 :placeholder="`${form.nbPerso} pers.`"
                 class="qty-input"
                 @update:modelValue="(v) => onTotalChange(link, v)"
               />
               <Select
-                :modelValue="link.unite"
+                :key="`unit-${link.idIngr}-${link.unite}`"
+                :modelValue="canonicalUnit(link.unite)"
                 :options="UNIT_OPTIONS"
                 optionLabel="label"
                 optionValue="value"

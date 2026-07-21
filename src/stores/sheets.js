@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { sheetsApi } from '@/services/sheetsApi'
 
-const SHEET_KEYS = ['recettes', 'ingredientsRecette', 'ingredients', 'allergenes', 'etape']
+const SHEET_KEYS = ['recettes', 'ingredientsRecette', 'ingredients', 'allergenes', 'substitutionsAllergenes', 'etape']
 
 export const useSheetsStore = defineStore('sheets', {
   state: () => ({
@@ -12,6 +12,7 @@ export const useSheetsStore = defineStore('sheets', {
       ingredientsRecette: [],
       ingredients: [],
       allergenes: [],
+      substitutionsAllergenes: [],
       etape: [],
     },
     headers: {
@@ -19,6 +20,7 @@ export const useSheetsStore = defineStore('sheets', {
       ingredientsRecette: [],
       ingredients: [],
       allergenes: [],
+      substitutionsAllergenes: [],
       etape: [],
     },
     loading: false,

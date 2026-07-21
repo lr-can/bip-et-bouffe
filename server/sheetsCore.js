@@ -44,9 +44,22 @@ export const SHEETS = {
     columns: ['idAllergie', 'nomAllergie'],
     idField: 'idAllergie',
   },
+  substitutionsAllergenes: {
+    name: 'substitutionsAllergenes',
+    columns: [
+      'idSubstitution',
+      'idAllergie',
+      'ingredientPattern',
+      'ingredientOriginal',
+      'ingredientSubstitut',
+      'ratio',
+      'notes',
+    ],
+    idField: 'idSubstitution',
+  },
   ingredientsRecette: {
     name: 'ingredientsRecette',
-    columns: ['idIngr', 'idRecette', 'qteParPersonne'],
+    columns: ['idIngr', 'idRecette', 'qteParPersonne', 'unite'],
     idField: null,
   },
   etape: {
@@ -71,6 +84,153 @@ const DEFAULT_ALLERGENS = [
   { idAllergie: 'all-sulfites', nomAllergie: 'Sulfites' },
   { idAllergie: 'all-lupin', nomAllergie: 'Lupin' },
   { idAllergie: 'all-mollusques', nomAllergie: 'Mollusques' },
+]
+
+const DEFAULT_SUBSTITUTIONS = [
+  {
+    idSubstitution: 'sub-lactose-lait-avoine',
+    idAllergie: 'all-lactose',
+    ingredientPattern: 'lait',
+    ingredientOriginal: 'Lait',
+    ingredientSubstitut: "Boisson d'avoine",
+    ratio: '1',
+    notes: 'Remplacement 1:1 pour sauces, pâtes et gâteaux.',
+  },
+  {
+    idSubstitution: 'sub-lactose-creme-coco',
+    idAllergie: 'all-lactose',
+    ingredientPattern: 'crème|creme',
+    ingredientOriginal: 'Crème',
+    ingredientSubstitut: 'Crème de coco ou crème végétale',
+    ratio: '1',
+    notes: 'Bon rendu crémeux, goût plus marqué avec coco.',
+  },
+  {
+    idSubstitution: 'sub-lactose-beurre-margarine',
+    idAllergie: 'all-lactose',
+    ingredientPattern: 'beurre',
+    ingredientOriginal: 'Beurre',
+    ingredientSubstitut: 'Margarine végétale',
+    ratio: '1',
+    notes: 'Remplacement direct en cuisson et pâtisserie.',
+  },
+  {
+    idSubstitution: 'sub-gluten-farine-riz',
+    idAllergie: 'all-gluten',
+    ingredientPattern: 'farine',
+    ingredientOriginal: 'Farine de blé',
+    ingredientSubstitut: 'Mix farine de riz + fécule',
+    ratio: '1',
+    notes: 'Base sans gluten ; ajouter un peu de xanthane si besoin.',
+  },
+  {
+    idSubstitution: 'sub-gluten-pates-sansgluten',
+    idAllergie: 'all-gluten',
+    ingredientPattern: 'pates|pâtes|nouilles',
+    ingredientOriginal: 'Pâtes / nouilles au blé',
+    ingredientSubstitut: 'Pâtes sans gluten',
+    ratio: '1',
+    notes: 'Riz, maïs, sarrasin ou légumineuses.',
+  },
+  {
+    idSubstitution: 'sub-gluten-chapelure-mais',
+    idAllergie: 'all-gluten',
+    ingredientPattern: 'chapelure|pain',
+    ingredientOriginal: 'Pain / chapelure',
+    ingredientSubstitut: 'Polenta fine ou chapelure sans gluten',
+    ratio: '1',
+    notes: 'Pratique pour panures et gratins.',
+  },
+  {
+    idSubstitution: 'sub-oeuf-oeuf-lin',
+    idAllergie: 'all-oeuf',
+    ingredientPattern: 'oeuf|œuf',
+    ingredientOriginal: 'Œuf',
+    ingredientSubstitut: 'Graines de lin moulues + eau',
+    ratio: '1',
+    notes: '1 càs de lin + 3 càs d’eau ≈ 1 œuf pour lier.',
+  },
+  {
+    idSubstitution: 'sub-oeuf-oeuf-aquafaba',
+    idAllergie: 'all-oeuf',
+    ingredientPattern: 'oeuf|œuf',
+    ingredientOriginal: 'Œuf',
+    ingredientSubstitut: 'Aquafaba',
+    ratio: '1',
+    notes: 'Pour mousse, meringue et légèreté.',
+  },
+  {
+    idSubstitution: 'sub-oeuf-mayo-yaourt',
+    idAllergie: 'all-oeuf',
+    ingredientPattern: 'mayonnaise',
+    ingredientOriginal: 'Mayonnaise',
+    ingredientSubstitut: 'Yaourt végétal assaisonné',
+    ratio: '1',
+    notes: 'Fonctionne bien en sauce froide.',
+  },
+  {
+    idSubstitution: 'sub-arachide-beurre-cajoufree',
+    idAllergie: 'all-arachide',
+    ingredientPattern: 'cacahuete|cacahuète|arachide|beurre de cacahuete|beurre de cacahuète',
+    ingredientOriginal: 'Cacahuète / beurre de cacahuète',
+    ingredientSubstitut: 'Purée de graines de tournesol',
+    ratio: '1',
+    notes: 'Texture proche sans arachide.',
+  },
+  {
+    idSubstitution: 'sub-fruitscoque-amande-tournesol',
+    idAllergie: 'all-fruits-coque',
+    ingredientPattern: 'amande|noisette|noix|pistache|cajou|pecan|pécan',
+    ingredientOriginal: 'Fruits à coque',
+    ingredientSubstitut: 'Graines de tournesol ou de courge',
+    ratio: '1',
+    notes: 'Pour croquant, pesto, granola ou topping.',
+  },
+  {
+    idSubstitution: 'sub-soja-lait-avoine',
+    idAllergie: 'all-soja',
+    ingredientPattern: 'soja|tofu|sauce soja',
+    ingredientOriginal: 'Soja',
+    ingredientSubstitut: "Boisson d'avoine, de riz ou assaisonnement sans soja",
+    ratio: '1',
+    notes: 'Adapter selon usage : boisson, tofu ou sauce.',
+  },
+  {
+    idSubstitution: 'sub-sesame-tahini-tournesol',
+    idAllergie: 'all-sesame',
+    ingredientPattern: 'sesame|sésame|tahini',
+    ingredientOriginal: 'Sésame / tahini',
+    ingredientSubstitut: 'Purée de tournesol',
+    ratio: '1',
+    notes: 'Très utile dans houmous et sauces.',
+  },
+  {
+    idSubstitution: 'sub-moutarde-vinaigrette',
+    idAllergie: 'all-moutarde',
+    ingredientPattern: 'moutarde',
+    ingredientOriginal: 'Moutarde',
+    ingredientSubstitut: 'Vinaigre de cidre + miel + curcuma',
+    ratio: '1',
+    notes: 'Pour retrouver acidité, douceur et couleur.',
+  },
+  {
+    idSubstitution: 'sub-poisson-algues',
+    idAllergie: 'all-poisson',
+    ingredientPattern: 'poisson|thon|saumon|cabillaud',
+    ingredientOriginal: 'Poisson',
+    ingredientSubstitut: 'Champignons + algues (nori/dulse)',
+    ratio: '1',
+    notes: 'Apporte texture et note marine.',
+  },
+  {
+    idSubstitution: 'sub-crustaces-champignon',
+    idAllergie: 'all-crustaces',
+    ingredientPattern: 'crevette|crevette|crevettes|gambas|langoustine|crustace|crustacé',
+    ingredientOriginal: 'Crustacés',
+    ingredientSubstitut: 'Pleurotes ou cœur de palmier',
+    ratio: '1',
+    notes: 'Bonne texture dans wok, pâtes et poêlées.',
+  },
 ]
 
 function normalizePrivateKey(raw) {
@@ -242,6 +402,13 @@ export async function seedAllergenesIfEmpty(sheets) {
   if (rows.length > 0) return { seeded: false, count: rows.length }
   await appendRows(sheets, 'allergenes', DEFAULT_ALLERGENS)
   return { seeded: true, count: DEFAULT_ALLERGENS.length }
+}
+
+export async function seedSubstitutionsIfEmpty(sheets) {
+  const { rows } = await readSheetObjects(sheets, 'substitutionsAllergenes')
+  if (rows.length > 0) return { seeded: false, count: rows.length }
+  await appendRows(sheets, 'substitutionsAllergenes', DEFAULT_SUBSTITUTIONS)
+  return { seeded: true, count: DEFAULT_SUBSTITUTIONS.length }
 }
 
 export async function deleteRecipeById(sheets, idRecette) {
