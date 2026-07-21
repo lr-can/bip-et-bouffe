@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useToast } from 'primevue/usetoast'
 import Button from 'primevue/button'
 import InputNumber from 'primevue/inputnumber'
 import MultiSelect from 'primevue/multiselect'
@@ -10,6 +11,7 @@ import Tag from 'primevue/tag'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
 import { typeLabel, toNumber } from '@/utils/recipe'
+import { costForQuantity } from '@/utils/nutrition'
 import { downloadRecipePdf } from '@/composables/useRecipePdf'
 
 const props = defineProps({
@@ -19,8 +21,11 @@ const props = defineProps({
 const sheets = useSheetsStore()
 const recipes = useRecipesStore()
 const router = useRouter()
+const toast = useToast()
 const personnes = ref(2)
 const selectedAdaptationIds = ref([])
+const priceDrafts = reactive({})
+const savingPriceId = ref(null)
 
 const recipe = computed(() => recipes.enriched(props.id, personnes.value))
 const allergenAdaptationOptions = computed(() =>
@@ -46,13 +51,88 @@ const recipeSubstitutionPreview = computed(() => {
     .filter(Boolean)
 })
 
+function syncPriceDrafts() {
+  for (const ing of recipe.value?.ingredients || []) {
+    if (priceDrafts[ing.idIngr] === undefined) {
+      priceDrafts[ing.idIngr] = toNumber(ing.prixUnitaire, 0)
+    }
+  }
+}
+
+function priceDirty(ing) {
+  return toNumber(priceDrafts[ing.idIngr], 0) !== toNumber(ing.prixUnitaire, 0)
+}
+
+/** Coût estimé avec le prix catalogue en cours d'édition (aperçu live). */
+function ingredientCostPreview(ing) {
+  const priced = {
+    ...ing,
+    unite: ing.uniteCatalogue || ing.unite,
+    prixUnitaire: toNumber(priceDrafts[ing.idIngr], toNumber(ing.prixUnitaire, 0)),
+  }
+  const perPers = costForQuantity(priced, Number(ing.qteParPersonne) || 0, ing.unite)
+  const total = costForQuantity(priced, Number(ing.quantite) || 0, ing.unite)
+  return { perPers, total }
+}
+
+const recipeCostPreview = computed(() => {
+  const ings = recipe.value?.ingredients || []
+  const total = ings.reduce((sum, ing) => sum + ingredientCostPreview(ing).total, 0)
+  const nb = Number(personnes.value) || 1
+  return {
+    total: Math.round(total * 100) / 100,
+    perPers: Math.round((total / nb) * 100) / 100,
+  }
+})
+
+async function saveIngredientPrice(ing) {
+  const row = sheets.data.ingredients?.find((r) => r.idIngr === ing.idIngr)
+  if (!row?._row) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Introuvable',
+      detail: 'Impossible de retrouver cet ingrédient dans le catalogue.',
+      life: 3000,
+    })
+    return
+  }
+  savingPriceId.value = ing.idIngr
+  try {
+    const prixUnitaire = String(toNumber(priceDrafts[ing.idIngr], 0))
+    await sheets.updateRow('ingredients', row._row, { prixUnitaire })
+    priceDrafts[ing.idIngr] = toNumber(prixUnitaire, 0)
+    toast.add({
+      severity: 'success',
+      summary: 'Prix mis à jour',
+      detail: `${ing.nomIngr} · ${toNumber(prixUnitaire, 0).toFixed(2)} € / ${ing.uniteCatalogue || ing.unite}`,
+      life: 2500,
+    })
+  } catch (err) {
+    toast.add({
+      severity: 'error',
+      summary: 'Erreur',
+      detail: err.message || 'Enregistrement impossible',
+      life: 3500,
+    })
+  } finally {
+    savingPriceId.value = null
+  }
+}
+
 watch(
   () => props.id,
   () => {
     const base = recipes.byId(props.id)
     personnes.value = toNumber(base?.nbPerso, 2) || 2
     selectedAdaptationIds.value = []
+    Object.keys(priceDrafts).forEach((k) => delete priceDrafts[k])
   },
+  { immediate: true },
+)
+
+watch(
+  () => recipe.value?.ingredients?.map((i) => `${i.idIngr}:${i.prixUnitaire}`).join('|'),
+  () => syncPriceDrafts(),
   { immediate: true },
 )
 
@@ -92,9 +172,9 @@ onMounted(() => {
             <span v-if="recipe.allergie"><i class="pi pi-exclamation-triangle" /> {{ recipe.allergie }}</span>
             <span>
               <i class="pi pi-wallet" />
-              {{ recipe.cout.toFixed(2) }} €
+              {{ recipeCostPreview.total.toFixed(2) }} €
               <span class="muted"> ({{ personnes }} pers.)</span>
-              <span class="muted"> · {{ recipe.coutParPers.toFixed(2) }} €/pers</span>
+              <span class="muted"> · {{ recipeCostPreview.perPers.toFixed(2) }} €/pers</span>
             </span>
           </p>
           <div v-if="recipe.nutritionParPers?.kcal" class="macros-card">
@@ -203,6 +283,38 @@ onMounted(() => {
                 <span v-if="ing.macrosParPers?.kcal" class="ing-macros">
                   {{ Math.round(ing.macrosParPers.kcal) }} kcal/pers
                 </span>
+                <div class="ing-cost-row">
+                  <span class="ing-cost">
+                    <strong>{{ ingredientCostPreview(ing).perPers.toFixed(2) }} €</strong>
+                    <span class="muted">/pers</span>
+                  </span>
+                  <span class="ing-cost">
+                    <strong>{{ ingredientCostPreview(ing).total.toFixed(2) }} €</strong>
+                    <span class="muted">recette ({{ personnes }} pers.)</span>
+                  </span>
+                </div>
+                <div class="ing-price-edit">
+                  <label>Prix catalogue</label>
+                  <InputNumber
+                    v-model="priceDrafts[ing.idIngr]"
+                    mode="decimal"
+                    :min="0"
+                    :minFractionDigits="0"
+                    :maxFractionDigits="4"
+                    class="price-input"
+                  />
+                  <span class="price-unit">€ / {{ ing.uniteCatalogue || ing.unite }}</span>
+                  <Button
+                    icon="pi pi-check"
+                    rounded
+                    text
+                    severity="success"
+                    :disabled="!priceDirty(ing)"
+                    :loading="savingPriceId === ing.idIngr"
+                    aria-label="Enregistrer le prix"
+                    @click="saveIngredientPrice(ing)"
+                  />
+                </div>
               </div>
               <span class="ing-qty">
                 {{ Number.isInteger(ing.quantite) ? ing.quantite : ing.quantite.toFixed(2) }}
@@ -398,6 +510,54 @@ h1 {
 }
 
 .ing-macros {
+  font-size: 0.78rem;
+  color: var(--cm-muted);
+  font-weight: 600;
+}
+
+.ing-cost-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.9rem;
+  margin-top: 0.35rem;
+}
+
+.ing-cost {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  font-size: 0.84rem;
+}
+
+.ing-cost strong {
+  font-weight: 750;
+}
+
+.ing-price-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+.ing-price-edit label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--cm-muted);
+  width: 100%;
+}
+
+.price-input {
+  width: 7rem;
+}
+
+.price-input :deep(.p-inputnumber),
+.price-input :deep(.p-inputnumber-input) {
+  width: 100%;
+}
+
+.price-unit {
   font-size: 0.78rem;
   color: var(--cm-muted);
   font-weight: 600;

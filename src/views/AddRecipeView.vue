@@ -173,8 +173,15 @@ const recipeMacrosPreview = computed(() => {
   const n = Number(form.nbPerso) || 1
   const r = (v) => Math.round(v * 10) / 10
   const costPerPerson = links.value.reduce((sum, l) => {
-    const catalog = recipes.ingredientsMap[l.idIngr] || l
-    return sum + costForQuantity(catalog, Number(l.qteParPersonne) || 0, l.unite)
+    const catalog = recipes.ingredientsMap[l.idIngr] || {}
+    const priced = {
+      ...catalog,
+      ...l,
+      unite: l.uniteCatalogue || catalog.unite || l.unite,
+      prixUnitaire: l.prixUnitaire ?? catalog.prixUnitaire,
+      nomIngr: l.nomIngr,
+    }
+    return sum + costForQuantity(priced, Number(l.qteParPersonne) || 0, l.unite)
   }, 0)
   return {
     perPerson: {
@@ -316,6 +323,23 @@ function searchIngredients(event) {
     .slice(0, 20)
 }
 
+function linkCost(link) {
+  const catalog = recipes.ingredientsMap[link.idIngr] || {}
+  const priced = {
+    ...catalog,
+    ...link,
+    unite: link.uniteCatalogue || catalog.unite || link.unite,
+    prixUnitaire: link.prixUnitaire ?? catalog.prixUnitaire,
+    nomIngr: link.nomIngr,
+  }
+  const per = costForQuantity(priced, Number(link.qteParPersonne) || 0, link.unite)
+  const n = Number(form.nbPerso) || 1
+  return {
+    perPers: per,
+    total: Math.round(per * n * 100) / 100,
+  }
+}
+
 function addExistingIngredient(ing) {
   if (!ing?.idIngr) return
   if (links.value.some((l) => l.idIngr === ing.idIngr)) return
@@ -324,6 +348,8 @@ function addExistingIngredient(ing) {
     idIngr: ing.idIngr,
     nomIngr: ing.nomIngr,
     unite: initial.unite,
+    uniteCatalogue: canonicalUnit(ing.unite),
+    prixUnitaire: toNumber(ing.prixUnitaire, 0),
     categorie: ing.categorie || '',
     idAllergie: ing.idAllergie || '',
     nomAllergie: recipes.allergenName(ing.idAllergie),
@@ -404,6 +430,7 @@ async function addToCatalogAndRecipe() {
       idIngr,
       nomIngr,
       unite: newIngredient.unite || 'g',
+      prixUnitaire: newIngredient.prixUnitaire ?? 0,
       idAllergie,
       categorie: newIngredient.categorie || '',
       ...nutrition,
@@ -529,6 +556,18 @@ async function submit() {
     }))
 
   try {
+    // Persiste les prix catalogue modifiés avant d'enregistrer la recette
+    for (const link of links.value) {
+      if (link.isNew) continue
+      const row = sheets.data.ingredients?.find((r) => r.idIngr === link.idIngr)
+      if (!row?._row) continue
+      const nextPrix = String(toNumber(link.prixUnitaire, 0))
+      const prevPrix = String(toNumber(row.prixUnitaire, 0))
+      if (nextPrix !== prevPrix) {
+        await sheets.updateRow('ingredients', row._row, { prixUnitaire: nextPrix })
+      }
+    }
+
     if (isEdit.value) {
       await sheets.updateRecipe(idRecette, {
         recipe,
@@ -584,6 +623,8 @@ function loadRecipeForEdit(id) {
     idIngr: ing.idIngr,
     nomIngr: ing.nomIngr,
     unite: canonicalUnit(ing.unite),
+    uniteCatalogue: canonicalUnit(ing.uniteCatalogue || recipes.ingredientsMap[ing.idIngr]?.unite || ing.unite),
+    prixUnitaire: toNumber(ing.prixUnitaire, 0),
     categorie: ing.categorie || '',
     idAllergie: ing.idAllergie || '',
     nomAllergie: ing.nomAllergie || recipes.allergenName(ing.idAllergie),
@@ -835,6 +876,28 @@ onMounted(bootstrap)
                   {{ badge.label }}
                 </span>
                 <span class="mini-chip mini-chip--neutral">par pers.</span>
+              </div>
+              <div class="link-cost-row">
+                <span class="macro-chip macro-chip--cost">
+                  <i class="pi pi-wallet" />
+                  {{ linkCost(link).perPers.toFixed(2) }} €/pers
+                </span>
+                <span class="macro-chip macro-chip--cost">
+                  <i class="pi pi-users" />
+                  {{ linkCost(link).total.toFixed(2) }} € ({{ form.nbPerso }} pers.)
+                </span>
+              </div>
+              <div class="link-price-edit">
+                <label>Prix catalogue</label>
+                <InputNumber
+                  v-model="link.prixUnitaire"
+                  mode="decimal"
+                  :min="0"
+                  :minFractionDigits="0"
+                  :maxFractionDigits="4"
+                  class="price-input"
+                />
+                <span class="price-unit">€ / {{ link.uniteCatalogue || link.unite }}</span>
               </div>
             </div>
             <div class="link-actions">
@@ -1296,6 +1359,43 @@ h1 {
   flex: 1;
   display: grid;
   gap: 0.1rem;
+}
+
+.link-cost-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.link-price-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.link-price-edit label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--cm-muted);
+  width: 100%;
+}
+
+.price-input {
+  width: 7rem;
+}
+
+.price-input :deep(.p-inputnumber),
+.price-input :deep(.p-inputnumber-input) {
+  width: 100%;
+}
+
+.price-unit {
+  font-size: 0.78rem;
+  color: var(--cm-muted);
+  font-weight: 600;
 }
 
 .recipe-macros {
