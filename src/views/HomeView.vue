@@ -44,13 +44,11 @@ const modes = [
 
 const recipeCount = computed(() => recipes.all.length)
 
-onMounted(async () => {
-  try {
-    await store.syncSchema()
-    await store.fetchAll()
-  } catch {
-    /* store.error */
-  }
+const proverbe = computed(() => store.proverbeDuJour)
+
+onMounted(() => {
+  // Le chargement initial est lancé par App.vue ; on s'assure juste qu'il a lieu.
+  store.ensureLoaded().catch(() => {})
 })
 </script>
 
@@ -60,12 +58,15 @@ onMounted(async () => {
     <div class="cm-shell hero-inner">
       <div class="hero-brand cm-rise">
         <img src="/logo.png" alt="Bip & Bouffe" class="hero-logo" width="160" height="160" />
-        <p class="hero-kicker">Cuisine du groupe</p>
-        <h1 class="cm-display hero-title">
+        <p class="hero-kicker">Le proverbe du jour</p>
+        <h1 v-if="proverbe" class="cm-display hero-title hero-title--proverb">
+          <span class="cm-grad-text">« {{ proverbe }} »</span>
+        </h1>
+        <h1 v-else class="cm-display hero-title">
           Entre potes,<br />
           <span class="cm-grad-text">autour de la table</span>
         </h1>
-        <p class="lede">
+        <p v-if="!proverbe" class="lede">
           Trouve une idée, planifie la semaine, partage la liste de courses.
         </p>
 
@@ -197,6 +198,13 @@ onMounted(async () => {
   letter-spacing: -0.04em;
 }
 
+.hero-title--proverb {
+  font-size: clamp(1.6rem, 5.2vw, 2.6rem);
+  line-height: 1.25;
+  margin-bottom: 1.4rem;
+  max-width: 34rem;
+}
+
 .lede {
   margin: 1rem 0 1.5rem;
   font-size: 1.08rem;
@@ -259,6 +267,7 @@ onMounted(async () => {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--cm-muted);
+  grid-column: 1 / -1;
 }
 
 .path-list {

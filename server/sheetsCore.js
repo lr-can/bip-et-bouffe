@@ -70,6 +70,11 @@ export const SHEETS = {
     columns: ['idEtape', 'idRecette', 'texte', 'ordre'],
     idField: 'idEtape',
   },
+  proverbes: {
+    name: 'proverbes',
+    columns: ['idProverbe', 'jour', 'texte'],
+    idField: 'idProverbe',
+  },
 }
 
 const DEFAULT_ALLERGENS = [
@@ -412,6 +417,19 @@ export async function seedSubstitutionsIfEmpty(sheets) {
   if (rows.length > 0) return { seeded: false, count: rows.length }
   await appendRows(sheets, 'substitutionsAllergenes', DEFAULT_SUBSTITUTIONS)
   return { seeded: true, count: DEFAULT_SUBSTITUTIONS.length }
+}
+
+export async function seedProverbesIfEmpty(sheets) {
+  const { rows } = await readSheetObjects(sheets, 'proverbes')
+  if (rows.length > 0) return { seeded: false, count: rows.length }
+  const { PROVERBS } = await import('./proverbs.js')
+  const objects = PROVERBS.map((texte, i) => ({
+    idProverbe: `prov-${String(i + 1).padStart(3, '0')}`,
+    jour: String(i + 1),
+    texte,
+  }))
+  await appendRows(sheets, 'proverbes', objects)
+  return { seeded: true, count: objects.length }
 }
 
 export async function deleteRecipeById(sheets, idRecette) {

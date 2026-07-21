@@ -1,7 +1,10 @@
 import { defineStore } from 'pinia'
 import { sheetsApi } from '@/services/sheetsApi'
 
-const SHEET_KEYS = ['recettes', 'ingredientsRecette', 'ingredients', 'allergenes', 'substitutionsAllergenes', 'etape']
+const SHEET_KEYS = ['recettes', 'ingredientsRecette', 'ingredients', 'allergenes', 'substitutionsAllergenes', 'etape', 'proverbes']
+
+/** Jours cumulés avant chaque mois (calendrier bissextile fixe → 366 jours). */
+const DAYS_BEFORE_MONTH = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
 
 export const useSheetsStore = defineStore('sheets', {
   state: () => ({
@@ -14,6 +17,7 @@ export const useSheetsStore = defineStore('sheets', {
       allergenes: [],
       substitutionsAllergenes: [],
       etape: [],
+      proverbes: [],
     },
     headers: {
       recettes: [],
@@ -22,6 +26,7 @@ export const useSheetsStore = defineStore('sheets', {
       allergenes: [],
       substitutionsAllergenes: [],
       etape: [],
+      proverbes: [],
     },
     loading: false,
     saving: false,
@@ -33,6 +38,19 @@ export const useSheetsStore = defineStore('sheets', {
     sheetKeys: () => SHEET_KEYS,
     countBySheet: (state) =>
       Object.fromEntries(SHEET_KEYS.map((k) => [k, state.data[k]?.length || 0])),
+
+    /**
+     * Proverbe du jour : chaque date tombe toujours sur le même proverbe
+     * (jour 1–366, 29 février inclus).
+     */
+    proverbeDuJour(state) {
+      const list = state.data.proverbes || []
+      if (!list.length) return ''
+      const now = new Date()
+      const jour = DAYS_BEFORE_MONTH[now.getMonth()] + now.getDate()
+      const found = list.find((p) => Number(p.jour) === jour)
+      return (found || list[(jour - 1) % list.length])?.texte || ''
+    },
   },
 
   actions: {

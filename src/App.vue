@@ -4,9 +4,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import Button from 'primevue/button'
 import Toast from 'primevue/toast'
 import { useThemeStore } from '@/stores/theme'
+import { useSheetsStore } from '@/stores/sheets'
+import AppSplash from '@/components/AppSplash.vue'
 
 const theme = useThemeStore()
 const route = useRoute()
+const sheets = useSheetsStore()
+
+const splashVisible = computed(() => sheets.loading && !sheets.lastFetchedAt)
 
 const links = [
   { to: '/recherche', label: 'Recherche', icon: 'pi pi-search' },
@@ -39,6 +44,15 @@ function rotateSlogan() {
 
 onMounted(() => {
   sloganTimer = setInterval(rotateSlogan, 5000)
+  // Chargement initial des données (schéma + feuilles), quel que soit l'écran d'entrée
+  ;(async () => {
+    try {
+      await sheets.syncSchema()
+      await sheets.fetchAll()
+    } catch {
+      /* sheets.error géré par les vues */
+    }
+  })()
 })
 
 onUnmounted(() => {
@@ -49,6 +63,9 @@ onUnmounted(() => {
 
 <template>
   <div class="app-root" :class="{ 'has-bottom-nav': showBottomNav }">
+    <Transition name="splash-fade">
+      <AppSplash v-if="splashVisible" />
+    </Transition>
     <header class="topbar">
       <div class="cm-shell topbar-inner">
         <RouterLink to="/" class="brand">
@@ -102,6 +119,14 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.splash-fade-leave-active {
+  transition: opacity 0.45s ease;
+}
+
+.splash-fade-leave-to {
+  opacity: 0;
+}
+
 .app-root {
   min-height: 100vh;
   display: flex;

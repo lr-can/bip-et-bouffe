@@ -9,6 +9,7 @@ import {
   ensureHeaders,
   seedAllergenesIfEmpty,
   seedSubstitutionsIfEmpty,
+  seedProverbesIfEmpty,
   appendRows,
   readSheetObjects,
   rewriteSheet,
@@ -103,7 +104,8 @@ export async function handleApi(req) {
       }
       const allergenes = await seedAllergenesIfEmpty(sheets)
       const substitutions = await seedSubstitutionsIfEmpty(sheets)
-      return json({ ok: true, schema: SHEETS, allergenes, substitutions })
+      const proverbes = await seedProverbesIfEmpty(sheets)
+      return json({ ok: true, schema: SHEETS, allergenes, substitutions, proverbes })
     }
 
     {

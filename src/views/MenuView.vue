@@ -4,6 +4,7 @@ import { RouterLink } from 'vue-router'
 import { useToast } from 'primevue/usetoast'
 import Button from 'primevue/button'
 import InputNumber from 'primevue/inputnumber'
+import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
 import MultiSelect from 'primevue/multiselect'
 import Dialog from 'primevue/dialog'
@@ -12,7 +13,7 @@ import Message from 'primevue/message'
 import Tag from 'primevue/tag'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
-import { useMenuStore } from '@/stores/menu'
+import { useMenuStore, BIAS_CONFIGS, BIAS_ORDER } from '@/stores/menu'
 import {
   RECIPE_TYPES,
   LUNCH_COURSE_TYPES,
@@ -21,6 +22,7 @@ import {
   typeLabel,
   dietLabels,
   spiceLevel,
+  fuzzyMatch,
 } from '@/utils/recipe'
 import { copyShoppingList } from '@/composables/useShoppingList'
 import { downloadMenuPdf } from '@/composables/useRecipePdf'
@@ -44,6 +46,9 @@ const stepAnimKey = ref(0)
 const phrasePick = ref(0)
 const wordsReady = ref(0)
 const mealRowEls = ref([])
+const fridgeQuery = ref('')
+const openFridgeCats = ref({})
+const altTick = ref(0)
 
 const WIZARD_STEPS = [
   {
@@ -107,6 +112,15 @@ const WIZARD_STEPS = [
       'On écartera les recettes concernées.',
       'Mieux vaut prévenir que soigner — on filtre pour toi.',
       'Rien à signaler ? Continue sans rien cocher.',
+    ],
+  },
+  {
+    id: 'frigo',
+    titles: ['L’état du frigo ?', 'Tu as déjà quoi en stock ?', 'On ouvre le frigo ?'],
+    hints: [
+      'Coche ce que tu as — on allège la liste de courses.',
+      'Recherche ou parcours par catégorie.',
+      'Frigo vide ? Dis-le, on repart de zéro.',
     ],
   },
   {
@@ -209,9 +223,7 @@ function onMealTimelineMounted(el) {
 }
 
 const moodOptions = computed(() =>
-  [{ label: 'Toutes les ambiances', value: '' }].concat(
-    recipes.moods.map((m) => ({ label: m, value: m })),
-  ),
+  recipes.moods.map((m) => ({ label: m, value: m })),
 )
 
 const allergyAvoidOptions = computed(() =>
@@ -232,6 +244,116 @@ const selectedAllergies = computed({
     menu.allergies = (values || []).join(', ')
   },
 })
+
+const fridgeCategories = computed(() => {
+  const q = fridgeQuery.value.trim()
+  return recipes.catalogByCategory
+    .map((group) => ({
+      name: group.name,
+      items: q
+        ? group.items.filter((ing) => fuzzyMatch(ing.nomIngr, q))
+        : group.items,
+    }))
+    .filter((group) => group.items.length > 0)
+})
+
+const fridgeSelectedCount = computed(() =>
+  menu.fridgeEmpty ? 0 : (menu.fridgeIngredientIds || []).length,
+)
+
+const mainDishSlot = computed(() => {
+  if (menu.activeSlots.includes('plat')) return 'plat'
+  if (menu.activeSlots.includes('diner')) return 'diner'
+  return null
+})
+
+const mainDish = computed(() => {
+  const slot = mainDishSlot.value
+  if (!slot) return null
+  return slotRecipe(slot)
+})
+
+const dishAlternatives = computed(() => {
+  void altTick.value
+  void menu.allSelectedIds.join('|')
+  void menu.activeDay
+  const slot = mainDishSlot.value
+  if (!slot || !mainDish.value) return []
+  return menu
+    .suggestAlternatives(slot, 2)
+    .map((r) => recipes.enriched(r.idRecette, menu.nbPersonnes))
+    .filter(Boolean)
+})
+
+const biasOptions = computed(() =>
+  BIAS_ORDER.map((id) => ({ id, short: BIAS_CONFIGS[id].short })),
+)
+
+const applyingBias = ref(false)
+
+const dayBalanceInfo = computed(() => {
+  void altTick.value
+  void menu.allSelectedIds.join('|')
+  return menu.dayBalance(menu.activeDay)
+})
+
+const dayBalanceLabel = computed(() => {
+  const b = dayBalanceInfo.value
+  if (!b || b.status === 'vide') return ''
+  if (b.status === 'equilibre') return 'Journée équilibrée'
+  const names = {
+    kcal: 'calories',
+    proteines: 'protéines',
+    glucides: 'glucides',
+    lipides: 'lipides',
+  }
+  const macro = names[b.worstKey] || b.worstKey
+  return b.status.startsWith('manque')
+    ? `Il manque des ${macro}`
+    : `Trop de ${macro}`
+})
+
+const rebalanceSuggestions = computed(() => {
+  void altTick.value
+  void menu.allSelectedIds.join('|')
+  void menu.activeDay
+  void menu.menuBias
+  return menu.suggestRebalance(menu.activeDay, 2).map((sug) => ({
+    ...sug,
+    enriched: recipes.enriched(sug.recipe.idRecette, menu.nbPersonnes),
+  }))
+})
+
+async function doseBias(bias) {
+  if (bias === menu.menuBias || applyingBias.value) return
+  applyingBias.value = true
+  await new Promise((r) => setTimeout(r, 120))
+  const ok = menu.applyBias(bias)
+  applyingBias.value = false
+  altTick.value += 1
+  if (ok) {
+    toast.add({
+      severity: 'success',
+      summary: BIAS_CONFIGS[bias].label,
+      detail: `Planning redosé · courses ${menu.shoppingCost.toFixed(2)} €`,
+      life: 2600,
+    })
+  }
+}
+
+function applyRebalance(sug) {
+  if (!sug?.slot || !sug?.recipe?.idRecette) return
+  menu.setSlot(sug.slot, sug.recipe.idRecette)
+  altTick.value += 1
+  toast.add({
+    severity: 'success',
+    summary: 'Journée rééquilibrée',
+    detail: `${sug.recipe.nomRecette} (${sug.label})`,
+    life: 2600,
+  })
+}
+
+const shoppingPreview = computed(() => menu.shoppingList.slice(0, 8))
 
 const activeDay = computed(() => menu.currentDay)
 
@@ -278,16 +400,6 @@ function openAddExtra() {
   addOpen.value = true
 }
 
-function confirmPick() {
-  if (!pickRecipe.value) return
-  if (replaceType.value) {
-    menu.setSlot(replaceType.value, pickRecipe.value.idRecette)
-  } else {
-    menu.addExtra(pickRecipe.value.idRecette)
-  }
-  addOpen.value = false
-}
-
 async function generate() {
   generating.value = true
   genPhraseIndex.value = 0
@@ -328,10 +440,11 @@ async function generate() {
 
 function chooseProposal(proposal) {
   if (!menu.selectProposal(proposal)) return
+  altTick.value += 1
   toast.add({
     severity: 'success',
     summary: proposal.label,
-    detail: `${proposal.ingredientCount} ingrédients · ${proposal.totalCost.toFixed(2)} €`,
+    detail: `${proposal.ingredientCount} ingrédients · ${Number(proposal.totalCost || 0).toFixed(2)} €`,
     life: 2800,
   })
 }
@@ -341,6 +454,7 @@ async function rollDice(type) {
   await new Promise((r) => setTimeout(r, 180))
   const picked = menu.rerollSlot(type)
   rerolling.value = null
+  altTick.value += 1
   if (!picked) {
     toast.add({
       severity: 'warn',
@@ -353,9 +467,32 @@ async function rollDice(type) {
   toast.add({
     severity: 'success',
     summary: 'Nouveau tirage',
-    detail: picked.nomRecette,
+    detail: `${picked.nomRecette} · courses ${menu.shoppingCost.toFixed(2)} €`,
     life: 2200,
   })
+}
+
+function pickAlternative(slot, recipe) {
+  if (!slot || !recipe?.idRecette) return
+  menu.applyAlternative(slot, recipe.idRecette)
+  altTick.value += 1
+  toast.add({
+    severity: 'success',
+    summary: 'Plat mis à jour',
+    detail: `${recipe.nomRecette} · courses ${menu.shoppingCost.toFixed(2)} €`,
+    life: 2200,
+  })
+}
+
+function toggleFridgeCategory(name) {
+  openFridgeCats.value = {
+    ...openFridgeCats.value,
+    [name]: !openFridgeCats.value[name],
+  }
+}
+
+function isFridgeSelected(idIngr) {
+  return (menu.fridgeIngredientIds || []).includes(idIngr)
 }
 
 async function copyList() {
@@ -379,7 +516,7 @@ async function exportPdf() {
     personnes: menu.nbPersonnes,
     days: menu.planSummary,
     shoppingList: menu.shoppingList,
-    totalCost: menu.totalCost,
+    totalCost: menu.shoppingCost,
     allergies: menu.allergies,
     collectedAllergies: menu.collectedAllergies,
   })
@@ -388,6 +525,17 @@ async function exportPdf() {
 function slotRecipe(type) {
   const id = activeDay.value?.[type]
   return id ? recipes.enriched(id, menu.nbPersonnes) : null
+}
+
+function confirmPick() {
+  if (!pickRecipe.value) return
+  if (replaceType.value) {
+    menu.setSlot(replaceType.value, pickRecipe.value.idRecette)
+  } else {
+    menu.addExtra(pickRecipe.value.idRecette)
+  }
+  addOpen.value = false
+  altTick.value += 1
 }
 
 function backToWizard() {
@@ -547,13 +695,15 @@ onUnmounted(() => {
             </div>
 
             <div v-else-if="currentWizard.id === 'ambiance'" class="wiz-answer wiz-answer-anim">
-              <Select
-                v-model="menu.mood"
+              <MultiSelect
+                v-model="menu.moods"
                 :options="moodOptions"
                 optionLabel="label"
                 optionValue="value"
+                placeholder="Toutes les ambiances — ou choisis…"
+                display="chip"
+                filter
                 fluid
-                placeholder="Toutes les ambiances"
               />
             </div>
 
@@ -628,6 +778,63 @@ onUnmounted(() => {
               />
             </div>
 
+            <div v-else-if="currentWizard.id === 'frigo'" class="wiz-answer fridge-wiz">
+              <button
+                type="button"
+                class="fridge-empty-btn wiz-pop"
+                style="--pop-delay: 0.04s"
+                :class="{ on: menu.fridgeEmpty }"
+                @click="menu.setFridgeEmpty(!menu.fridgeEmpty)"
+              >
+                <i class="pi" :class="menu.fridgeEmpty ? 'pi-inbox' : 'pi-box'" />
+                <span>Mon frigo est vide 😅</span>
+              </button>
+
+              <template v-if="!menu.fridgeEmpty">
+                <p class="fridge-count muted">
+                  {{ fridgeSelectedCount }} ingrédient{{ fridgeSelectedCount > 1 ? 's' : '' }} coché{{ fridgeSelectedCount > 1 ? 's' : '' }}
+                </p>
+                <InputText
+                  v-model="fridgeQuery"
+                  fluid
+                  placeholder="Rechercher un ingrédient…"
+                  class="fridge-search"
+                />
+                <div class="fridge-cats">
+                  <div v-for="group in fridgeCategories" :key="group.name" class="fridge-cat">
+                    <button
+                      type="button"
+                      class="fridge-cat-head"
+                      @click="toggleFridgeCategory(group.name)"
+                    >
+                      <i class="pi" :class="openFridgeCats[group.name] || fridgeQuery ? 'pi-chevron-down' : 'pi-chevron-right'" />
+                      <span>{{ group.name }}</span>
+                      <span class="muted">{{ group.items.length }}</span>
+                    </button>
+                    <div
+                      v-if="openFridgeCats[group.name] || fridgeQuery"
+                      class="fridge-cat-items"
+                    >
+                      <label
+                        v-for="ing in group.items"
+                        :key="ing.idIngr"
+                        class="fridge-item"
+                        :class="{ on: isFridgeSelected(ing.idIngr) }"
+                      >
+                        <input
+                          type="checkbox"
+                          :checked="isFridgeSelected(ing.idIngr)"
+                          @change="menu.toggleFridgeIngredient(ing.idIngr)"
+                        />
+                        <span>{{ ing.nomIngr }}</span>
+                      </label>
+                    </div>
+                  </div>
+                  <p v-if="!fridgeCategories.length" class="muted">Aucun ingrédient trouvé.</p>
+                </div>
+              </template>
+            </div>
+
             <div v-else-if="currentWizard.id === 'budget'" class="wiz-answer big-number wiz-answer-anim">
 
               <InputNumber
@@ -679,10 +886,10 @@ onUnmounted(() => {
       <div class="proposals cm-rise">
         <header class="proposals-head">
           <div>
-            <p class="eyebrow">Optimisé courses</p>
-            <h2 class="cm-display">Trois plannings, un panier plus léger</h2>
+            <p class="eyebrow">Dosage intelligent</p>
+            <h2 class="cm-display">Trois plannings, trois dosages</h2>
             <p class="lede">
-              On favorise le partage d’ingrédients entre les repas. Compare le nombre d’articles et le prix estimé.
+              Chaque proposition optimise un axe : apports journaliers, protéines, budget ou légèreté.
             </p>
           </div>
           <Button
@@ -709,12 +916,24 @@ onUnmounted(() => {
 
             <div class="proposal-stats">
               <div class="proposal-stat">
-                <span class="proposal-stat-label">Ingrédients</span>
+                <span class="proposal-stat-label">Protéines / j / pers</span>
+                <strong>{{ proposal.proteinesParJour }} g</strong>
+              </div>
+              <div class="proposal-stat">
+                <span class="proposal-stat-label">kcal / j / pers</span>
+                <strong>{{ proposal.kcalParJour }}</strong>
+              </div>
+              <div class="proposal-stat">
+                <span class="proposal-stat-label">Prix courses</span>
+                <strong>{{ proposal.totalCost.toFixed(2) }} €</strong>
+              </div>
+              <div class="proposal-stat">
+                <span class="proposal-stat-label">Articles</span>
                 <strong>{{ proposal.ingredientCount }}</strong>
               </div>
               <div class="proposal-stat">
-                <span class="proposal-stat-label">Prix estimé</span>
-                <strong>{{ proposal.totalCost.toFixed(2) }} €</strong>
+                <span class="proposal-stat-label">Plats distincts</span>
+                <strong>{{ proposal.uniqueRecipes || proposal.recipeCount }}</strong>
               </div>
               <div class="proposal-stat">
                 <span class="proposal-stat-label">Repas</span>
@@ -743,6 +962,21 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="menu.phase === 'plan'">
+      <div class="bias-bar cm-rise" role="group" aria-label="Doser le menu">
+        <span class="bias-label">Doser :</span>
+        <button
+          v-for="opt in biasOptions"
+          :key="opt.id"
+          type="button"
+          class="bias-btn"
+          :class="{ on: menu.menuBias === opt.id }"
+          :disabled="applyingBias"
+          @click="doseBias(opt.id)"
+        >
+          {{ opt.short }}
+        </button>
+      </div>
+
       <div class="day-rail cm-rise" role="tablist" aria-label="Jours du planning">
         <button
           v-for="(day, i) in menu.planSummary"
@@ -773,8 +1007,17 @@ onUnmounted(() => {
               {{ menu.dayCost(menu.activeDay).toFixed(2) }} € estimés
               <template v-if="menu.dayNutrition(menu.activeDay).kcal">
                 · {{ Math.round(menu.dayNutrition(menu.activeDay).kcal) }} kcal/pers
+                · {{ menu.dayNutrition(menu.activeDay).proteines }} g prot./pers
               </template>
             </p>
+            <span
+              v-if="dayBalanceLabel"
+              class="balance-badge"
+              :class="dayBalanceInfo.status === 'equilibre' ? 'balance-ok' : 'balance-warn'"
+            >
+              <i class="pi" :class="dayBalanceInfo.status === 'equilibre' ? 'pi-check-circle' : 'pi-sliders-h'" />
+              {{ dayBalanceLabel }}
+            </span>
           </div>
           <div class="day-panel-actions">
             <Button icon="pi pi-trash" rounded text severity="secondary" aria-label="Vider le jour" @click="menu.clearDay()" />
@@ -797,51 +1040,72 @@ onUnmounted(() => {
                 {{ typeLabel(type) }}
               </div>
               <template v-if="slotRecipe(type)">
-                <RouterLink :to="`/recette/${slotRecipe(type).idRecette}`" class="meal-card filled">
-                  <div>
-                    <strong>{{ slotRecipe(type).nomRecette }}</strong>
-                    <p>
-                      <Tag v-if="slotRecipe(type).mood" :value="slotRecipe(type).mood" severity="secondary" rounded />
-                      <Tag
-                        v-for="d in dietLabels(slotRecipe(type))"
-                        :key="d"
-                        :value="d"
-                        :severity="d === 'Vegan' ? 'success' : 'info'"
-                        rounded
-                      />
-                      <SpicePeppers
-                        v-if="spiceLevel(slotRecipe(type).spiceLevel) > 0"
-                        :level="slotRecipe(type).spiceLevel"
-                        size="sm"
-                      />
-                      <Tag v-if="slotRecipe(type).allergie" :value="slotRecipe(type).allergie" severity="warn" rounded />
-                      <span>{{ slotRecipe(type).tps || '—' }}</span>
-                      <span>{{ slotRecipe(type).cout.toFixed(2) }} €</span>
-                    </p>
+                <div class="meal-main">
+                  <span v-if="type === mainDishSlot" class="main-dish-badge">Plat principal</span>
+                  <RouterLink :to="`/recette/${slotRecipe(type).idRecette}`" class="meal-card filled">
+                    <div>
+                      <strong>{{ slotRecipe(type).nomRecette }}</strong>
+                      <p>
+                        <Tag v-if="slotRecipe(type).mood" :value="slotRecipe(type).mood" severity="secondary" rounded />
+                        <Tag
+                          v-for="d in dietLabels(slotRecipe(type))"
+                          :key="d"
+                          :value="d"
+                          :severity="d === 'Vegan' ? 'success' : 'info'"
+                          rounded
+                        />
+                        <SpicePeppers
+                          v-if="spiceLevel(slotRecipe(type).spiceLevel) > 0"
+                          :level="slotRecipe(type).spiceLevel"
+                          size="sm"
+                        />
+                        <Tag v-if="slotRecipe(type).allergie" :value="slotRecipe(type).allergie" severity="warn" rounded />
+                        <span>{{ slotRecipe(type).tps || '—' }}</span>
+                        <span>{{ slotRecipe(type).cout.toFixed(2) }} €</span>
+                      </p>
+                    </div>
+                  </RouterLink>
+                  <div class="meal-actions">
+                    <Button
+                      class="dice-btn"
+                      rounded
+                      text
+                      :loading="rerolling === type"
+                      aria-label="Tirer au hasard"
+                      title="Tirer une autre recette"
+                      @click="rollDice(type)"
+                    >
+                      <svg v-if="rerolling !== type" class="dice-svg" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="4" fill="currentColor" opacity="0.12" />
+                        <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+                        <circle cx="8.5" cy="8.5" r="1.35" fill="currentColor" />
+                        <circle cx="15.5" cy="8.5" r="1.35" fill="currentColor" />
+                        <circle cx="12" cy="12" r="1.35" fill="currentColor" />
+                        <circle cx="8.5" cy="15.5" r="1.35" fill="currentColor" />
+                        <circle cx="15.5" cy="15.5" r="1.35" fill="currentColor" />
+                      </svg>
+                    </Button>
+                    <Button icon="pi pi-search" rounded text aria-label="Choisir" @click="openReplace(type)" />
+                    <Button icon="pi pi-times" rounded text severity="danger" @click="menu.clearSlot(type); altTick += 1" />
                   </div>
-                </RouterLink>
-                <div class="meal-actions">
-                  <Button
-                    class="dice-btn"
-                    rounded
-                    text
-                    :loading="rerolling === type"
-                    aria-label="Tirer au hasard"
-                    title="Tirer une autre recette"
-                    @click="rollDice(type)"
-                  >
-                    <svg v-if="rerolling !== type" class="dice-svg" viewBox="0 0 24 24" aria-hidden="true">
-                      <rect x="3" y="3" width="18" height="18" rx="4" fill="currentColor" opacity="0.12" />
-                      <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.5" />
-                      <circle cx="8.5" cy="8.5" r="1.35" fill="currentColor" />
-                      <circle cx="15.5" cy="8.5" r="1.35" fill="currentColor" />
-                      <circle cx="12" cy="12" r="1.35" fill="currentColor" />
-                      <circle cx="8.5" cy="15.5" r="1.35" fill="currentColor" />
-                      <circle cx="15.5" cy="15.5" r="1.35" fill="currentColor" />
-                    </svg>
-                  </Button>
-                  <Button icon="pi pi-search" rounded text aria-label="Choisir" @click="openReplace(type)" />
-                  <Button icon="pi pi-times" rounded text severity="danger" @click="menu.clearSlot(type)" />
+                </div>
+
+                <div v-if="type === mainDishSlot && dishAlternatives.length" class="alt-block">
+                  <p class="alt-title">Ça te plaît pas ?</p>
+                  <div class="alt-grid">
+                    <button
+                      v-for="alt in dishAlternatives"
+                      :key="alt.idRecette"
+                      type="button"
+                      class="alt-card"
+                      @click="pickAlternative(type, alt)"
+                    >
+                      <strong>{{ alt.nomRecette }}</strong>
+                      <span class="muted">
+                        {{ alt.tps || '—' }} · {{ Number(alt.cout || 0).toFixed(2) }} €
+                      </span>
+                    </button>
+                  </div>
                 </div>
               </template>
               <div v-else class="meal-empty-row">
@@ -882,9 +1146,32 @@ onUnmounted(() => {
             <Button icon="pi pi-times" rounded text severity="danger" @click="menu.removeExtra(id)" />
           </div>
         </div>
+
+        <div v-if="rebalanceSuggestions.length" class="rebalance-panel">
+          <p class="rebalance-title">
+            <i class="pi pi-sliders-h" />
+            Pour équilibrer la journée
+          </p>
+          <div class="rebalance-grid">
+            <button
+              v-for="sug in rebalanceSuggestions"
+              :key="`${sug.slot}-${sug.recipe.idRecette}`"
+              type="button"
+              class="rebalance-card"
+              @click="applyRebalance(sug)"
+            >
+              <span class="rebalance-slot">{{ typeLabel(sug.slot) }}</span>
+              <strong>{{ sug.recipe.nomRecette }}</strong>
+              <span class="rebalance-gain">{{ sug.label }}</span>
+              <span v-if="sug.enriched" class="muted">
+                {{ Number(sug.enriched.cout || 0).toFixed(2) }} €
+              </span>
+            </button>
+          </div>
+        </div>
       </article>
 
-      <section class="shopping-dock cm-rise">
+      <section class="shopping-dock cm-rise" :key="`shop-${menu.allSelectedIds.join('|')}-${menu.shoppingCost}`">
         <div v-if="menu.allergies || menu.collectedAllergies.length" class="allergy-banner">
           <strong>Allergies</strong>
           <span v-if="menu.allergies">À éviter : {{ menu.allergies }}</span>
@@ -894,12 +1181,16 @@ onUnmounted(() => {
         </div>
         <div class="dock-stats">
           <div>
-            <span class="stat-label">Total</span>
-            <strong class="stat-value">{{ menu.totalCost.toFixed(2) }} €</strong>
+            <span class="stat-label">Courses</span>
+            <strong class="stat-value">{{ menu.shoppingCost.toFixed(2) }} €</strong>
           </div>
           <div>
-            <span class="stat-label">Courses</span>
+            <span class="stat-label">Articles</span>
             <strong class="stat-value">{{ menu.shoppingList.length }}</strong>
+          </div>
+          <div v-if="menu.shoppingFromFridge.length">
+            <span class="stat-label">Déjà en frigo</span>
+            <strong class="stat-value">{{ menu.shoppingFromFridge.length }}</strong>
           </div>
         </div>
         <div class="dock-actions">
@@ -908,7 +1199,7 @@ onUnmounted(() => {
             icon="pi pi-copy"
             class="cm-btn-cool"
             rounded
-            :disabled="!menu.shoppingList.length"
+            :disabled="!menu.shoppingList.length && !menu.shoppingFromFridge.length"
             @click="copyList"
           />
           <Button
@@ -920,18 +1211,22 @@ onUnmounted(() => {
             @click="exportPdf"
           />
         </div>
-        <ul v-if="menu.shoppingList.length" class="shop-preview">
-          <li v-for="item in menu.shoppingList.slice(0, 8)" :key="item.idIngr">
+        <ul v-if="shoppingPreview.length" class="shop-preview">
+          <li v-for="item in shoppingPreview" :key="item.idIngr || item.nomIngr">
             <span>{{ item.nomIngr }}</span>
             <span class="muted">
               {{ Number.isInteger(item.quantite) ? item.quantite : item.quantite.toFixed(1) }}
               {{ item.unite }}
+              <template v-if="item.cout"> · {{ Number(item.cout).toFixed(2) }} €</template>
             </span>
           </li>
           <li v-if="menu.shoppingList.length > 8" class="muted">
             + {{ menu.shoppingList.length - 8 }} autres (copie ou PDF)
           </li>
         </ul>
+        <p v-else-if="menu.allSelectedIds.length" class="muted">
+          Rien à acheter — tout est déjà en frigo.
+        </p>
       </section>
     </template>
 
@@ -1357,15 +1652,19 @@ h1 {
   background: var(--cm-grad-warm);
 }
 
-.proposal-badge.tone-compact {
-  background: linear-gradient(120deg, #0d9488, #14b8a6);
-}
-
-.proposal-badge.tone-balanced {
+.proposal-badge.tone-equilibre {
   background: var(--cm-grad-warm);
 }
 
-.proposal-badge.tone-varied {
+.proposal-badge.tone-proteine {
+  background: linear-gradient(120deg, #0d9488, #14b8a6);
+}
+
+.proposal-badge.tone-economique {
+  background: linear-gradient(120deg, #d97706, #f59e0b);
+}
+
+.proposal-badge.tone-leger {
   background: linear-gradient(120deg, #6366f1, #a78bfa);
 }
 
@@ -1454,6 +1753,127 @@ h1 {
 }
 
 /* —— Plan —— */
+.bias-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.85rem;
+}
+
+.bias-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--cm-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bias-btn {
+  padding: 0.42rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  font-weight: 700;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.bias-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.bias-btn.on {
+  border-color: transparent;
+  background: var(--cm-grad-warm);
+  color: #fff;
+  box-shadow: 0 8px 20px var(--cm-glow);
+}
+
+.bias-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.balance-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.balance-ok {
+  background: color-mix(in srgb, #10b981 16%, transparent);
+  color: #0a7a58;
+}
+
+.balance-warn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #9a6203;
+}
+
+.rebalance-panel {
+  margin-top: 1rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 1rem;
+  border: 1px dashed color-mix(in srgb, var(--cm-border) 80%, transparent);
+  background: color-mix(in srgb, var(--cm-bg) 55%, transparent);
+  display: grid;
+  gap: 0.55rem;
+}
+
+.rebalance-title {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 750;
+  color: var(--cm-muted);
+}
+
+.rebalance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.rebalance-card {
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.rebalance-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--cm-cool, #2a7a8c) 45%, var(--cm-border));
+}
+
+.rebalance-slot {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cm-muted);
+}
+
+.rebalance-gain {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #0a7a58;
+}
+
 .day-rail {
   display: flex;
   gap: 0.5rem;
@@ -1551,9 +1971,85 @@ h1 {
 
 .meal-body {
   display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  align-items: start;
+}
+
+.meal-main {
+  display: grid;
   grid-template-columns: 1fr auto;
-  gap: 0.5rem;
+  gap: 0.5rem 0.5rem;
   align-items: center;
+  width: 100%;
+}
+
+.meal-main .meal-card {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.meal-main .meal-actions {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.main-dish-badge {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  width: fit-content;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--cm-grad-warm, linear-gradient(135deg, #ff8a4c, #ff5a36));
+}
+
+.alt-block {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.65rem 0.75rem;
+  border-radius: 0.9rem;
+  border: 1px dashed color-mix(in srgb, var(--cm-border) 80%, transparent);
+  background: color-mix(in srgb, var(--cm-bg) 55%, transparent);
+}
+
+.alt-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--cm-muted);
+}
+
+.alt-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.alt-card {
+  display: grid;
+  gap: 0.15rem;
+  text-align: left;
+  padding: 0.55rem 0.65rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.alt-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--cm-cool, #2a7a8c) 45%, var(--cm-border));
+}
+
+.alt-card strong {
+  font-size: 0.9rem;
+  line-height: 1.25;
 }
 
 .meal-empty-row {
@@ -1561,7 +2057,6 @@ h1 {
   grid-template-columns: 1fr auto;
   gap: 0.35rem;
   align-items: center;
-  grid-column: 1 / -1;
 }
 
 .meal-marker {
@@ -1749,6 +2244,87 @@ h1 {
   font-size: 0.92rem;
 }
 
+.fridge-wiz {
+  display: grid;
+  gap: 0.75rem;
+  width: min(100%, 36rem);
+}
+
+.fridge-empty-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  justify-content: center;
+  padding: 0.75rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--cm-border);
+  background: var(--cm-surface);
+  font-weight: 700;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.fridge-empty-btn.on {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--cm-orange, #ff6b35) 18%, var(--cm-surface));
+}
+
+.fridge-count {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.fridge-cats {
+  display: grid;
+  gap: 0.4rem;
+  max-height: 16rem;
+  overflow: auto;
+  padding-right: 0.2rem;
+}
+
+.fridge-cat-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--cm-bg) 70%, transparent);
+  cursor: pointer;
+  font-weight: 700;
+  text-align: left;
+}
+
+.fridge-cat-head .muted {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.fridge-cat-items {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.25rem 0.35rem 0.55rem 1.4rem;
+}
+
+.fridge-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.28rem 0.35rem;
+  border-radius: 0.45rem;
+  cursor: pointer;
+  font-size: 0.92rem;
+}
+
+.fridge-item.on {
+  background: color-mix(in srgb, var(--cm-cool, #2a7a8c) 12%, transparent);
+}
+
+.fridge-item input {
+  accent-color: var(--cm-cool, #2a7a8c);
+}
+
 .dialog-form {
   display: grid;
   gap: 0.9rem;
@@ -1908,9 +2484,27 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .meal-main {
+    grid-template-columns: 1fr;
+  }
+
+  .meal-main .meal-card,
+  .meal-main .meal-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
   .meal-actions {
     flex-direction: row;
     justify-content: flex-end;
+  }
+
+  .alt-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .rebalance-grid {
+    grid-template-columns: 1fr;
   }
 
   .proposal-grid {
