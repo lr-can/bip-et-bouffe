@@ -237,6 +237,32 @@ function macrosLabel(ing) {
   return `${Math.round(kcal || 0)} kcal/100g · P${ing.proteines100 || 0} G${ing.glucides100 || 0} L${ing.lipides100 || 0}`
 }
 
+function nutritionBadges(ing) {
+  if (!ing) return []
+  const hasAny =
+    String(ing.kcal100 ?? '').trim() !== '' ||
+    String(ing.proteines100 ?? '').trim() !== '' ||
+    String(ing.glucides100 ?? '').trim() !== '' ||
+    String(ing.lipides100 ?? '').trim() !== ''
+  if (!hasAny) return []
+  return [
+    { icon: 'pi pi-bolt', label: `${Math.round(Number(ing.kcal100) || 0)} kcal/100g`, tone: 'warm' },
+    { icon: 'pi pi-hammer', label: `Prot. ${ing.proteines100 || 0} g`, tone: 'cool' },
+    { icon: 'pi pi-sun', label: `Gluc. ${ing.glucides100 || 0} g`, tone: 'green' },
+    { icon: 'pi pi-circle', label: `Lip. ${ing.lipides100 || 0} g`, tone: 'purple' },
+  ]
+}
+
+function recipePreviewBadges(m) {
+  if (!m) return []
+  return [
+    { icon: 'pi pi-bolt', label: `${Math.round(m.kcal || 0)} kcal`, tone: 'warm' },
+    { icon: 'pi pi-hammer', label: `${m.proteines || 0} g prot.`, tone: 'cool' },
+    { icon: 'pi pi-sun', label: `${m.glucides || 0} g gluc.`, tone: 'green' },
+    { icon: 'pi pi-circle', label: `${m.lipides || 0} g lip.`, tone: 'purple' },
+  ]
+}
+
 function linkMacros(link) {
   return macrosForQuantity(link, Number(link.qteParPersonne) || 0)
 }
@@ -762,14 +788,28 @@ onMounted(bootstrap)
           <div v-for="link in links" :key="link.idIngr" class="link-row">
             <div class="link-info">
               <strong>{{ link.nomIngr }}</strong>
-              <span class="muted">
-                <template v-if="link.categorie">{{ link.categorie }}</template>
-                <template v-if="link.nomAllergie"> · ⚠ {{ link.nomAllergie }}</template>
-              </span>
-              <span class="ing-macros">
-                {{ formatMacros(linkMacros(link)) }}
-                <span class="muted"> / pers</span>
-              </span>
+              <div class="inline-badges">
+                <span v-if="link.categorie" class="mini-chip mini-chip--neutral">
+                  <i class="pi pi-tag" />
+                  {{ link.categorie }}
+                </span>
+                <span v-if="link.nomAllergie" class="mini-chip mini-chip--warn">
+                  <i class="pi pi-exclamation-triangle" />
+                  {{ link.nomAllergie }}
+                </span>
+              </div>
+              <div class="macro-chip-row">
+                <span
+                  v-for="badge in recipePreviewBadges(linkMacros(link))"
+                  :key="badge.label"
+                  class="macro-chip"
+                  :class="`macro-chip--${badge.tone}`"
+                >
+                  <i class="pi" :class="badge.icon" />
+                  {{ badge.label }}
+                </span>
+                <span class="mini-chip mini-chip--neutral">par pers.</span>
+              </div>
             </div>
             <div class="link-actions">
               <InputNumber
@@ -798,12 +838,40 @@ onMounted(bootstrap)
 
         <div v-if="links.length" class="nutrition-preview recipe-macros">
           <strong>Estimation nutrition</strong>
-          <span>
-            / pers : {{ formatMacros(recipeMacrosPreview.perPerson) }}
-          </span>
-          <span>
-            total ({{ form.nbPerso }} pers.) : {{ formatMacros(recipeMacrosPreview.total) }}
-          </span>
+          <div class="preview-block">
+            <span class="preview-label">
+              <i class="pi pi-user" />
+              Par personne
+            </span>
+            <div class="macro-chip-row">
+              <span
+                v-for="badge in recipePreviewBadges(recipeMacrosPreview.perPerson)"
+                :key="`per-${badge.label}`"
+                class="macro-chip"
+                :class="`macro-chip--${badge.tone}`"
+              >
+                <i class="pi" :class="badge.icon" />
+                {{ badge.label }}
+              </span>
+            </div>
+          </div>
+          <div class="preview-block">
+            <span class="preview-label">
+              <i class="pi pi-users" />
+              Total ({{ form.nbPerso }} pers.)
+            </span>
+            <div class="macro-chip-row">
+              <span
+                v-for="badge in recipePreviewBadges(recipeMacrosPreview.total)"
+                :key="`tot-${badge.label}`"
+                class="macro-chip"
+                :class="`macro-chip--${badge.tone}`"
+              >
+                <i class="pi" :class="badge.icon" />
+                {{ badge.label }}
+              </span>
+            </div>
+          </div>
         </div>
 
         <Button
@@ -871,8 +939,21 @@ onMounted(bootstrap)
 
           <div v-if="nutritionPreview?.found" class="nutrition-preview">
             <strong>{{ nutritionPreview.productName || newIngredient.nomIngr }}</strong>
-            <span>{{ macrosLabel(nutritionPreview) }}</span>
-            <span class="muted">source : {{ nutritionPreview.nutritionSource }}</span>
+            <div class="macro-chip-row">
+              <span
+                v-for="badge in nutritionBadges(nutritionPreview)"
+                :key="badge.label"
+                class="macro-chip"
+                :class="`macro-chip--${badge.tone}`"
+              >
+                <i class="pi" :class="badge.icon" />
+                {{ badge.label }}
+              </span>
+            </div>
+            <span class="mini-chip mini-chip--neutral source-chip">
+              <i class="pi pi-database" />
+              Source : {{ nutritionPreview.nutritionSource }}
+            </span>
           </div>
 
           <div class="new-ing-actions">
@@ -1208,6 +1289,80 @@ h1 {
   font-size: 0.78rem;
   color: var(--cm-muted);
   font-weight: 600;
+}
+
+.inline-badges,
+.macro-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+}
+
+.mini-chip,
+.macro-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.24rem 0.6rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.mini-chip i,
+.macro-chip i {
+  font-size: 0.72rem;
+}
+
+.mini-chip--neutral {
+  background: color-mix(in srgb, var(--cm-border) 55%, transparent);
+  color: var(--cm-text);
+}
+
+.mini-chip--warn {
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #b45309;
+}
+
+.macro-chip--warm {
+  background: color-mix(in srgb, var(--cm-orange, #f97316) 16%, transparent);
+  color: color-mix(in srgb, var(--cm-orange, #f97316) 85%, #4b5563);
+}
+
+.macro-chip--cool {
+  background: color-mix(in srgb, #3b82f6 14%, transparent);
+  color: #1d4ed8;
+}
+
+.macro-chip--green {
+  background: color-mix(in srgb, #10b981 16%, transparent);
+  color: #047857;
+}
+
+.macro-chip--purple {
+  background: color-mix(in srgb, #8b5cf6 16%, transparent);
+  color: #6d28d9;
+}
+
+.preview-block {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.preview-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--cm-text);
+}
+
+.source-chip {
+  width: fit-content;
+  margin-top: 0.2rem;
 }
 
 .empty-links {
