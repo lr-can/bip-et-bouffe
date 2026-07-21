@@ -14,7 +14,7 @@ import {
   rewriteSheet,
   deleteRecipeById,
 } from './sheetsCore.js'
-import { resolveNutrition, sleep } from './nutrition.js'
+import { resolveNutrition, searchOpenFoodFactsList, sleep } from './nutrition.js'
 
 function json(data, status = 200) {
   return Response.json(data, {
@@ -337,6 +337,19 @@ export async function handleApi(req) {
       const result = await resolveNutrition(name, { preferApi: body.preferApi !== false })
       if (!result) return json({ ok: false, found: false, name })
       return json({ ok: true, found: true, name, ...result })
+    }
+
+    if (method === 'POST' && path === '/api/nutrition/search') {
+      const body = (await readBody(req)) || {}
+      const name = String(body.name || body.nomIngr || body.q || '').trim()
+      if (!name) return json({ error: 'name requis' }, 400)
+      const limit = Math.min(12, Math.max(1, Number(body.limit) || 8))
+      try {
+        const results = await searchOpenFoodFactsList(name, limit)
+        return json({ ok: true, name, count: results.length, results })
+      } catch (err) {
+        return json({ ok: false, name, count: 0, results: [], error: err.message }, 502)
+      }
     }
 
     if (method === 'POST' && path === '/api/nutrition/enrich') {

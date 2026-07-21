@@ -31,6 +31,8 @@ export const sheetsApi = {
   deleteRecipe: (id) => api.delete(`/api/recipes/${id}`).then((r) => r.data),
   lookupNutrition: (name) =>
     api.post('/api/nutrition/lookup', { name }).then((r) => r.data),
+  searchNutrition: (name, limit = 8) =>
+    api.post('/api/nutrition/search', { name, limit }).then((r) => r.data),
   enrichNutrition: (force = false) =>
     api.post('/api/nutrition/enrich', { force }).then((r) => r.data),
   importIngredients: (items, enrich = true) =>

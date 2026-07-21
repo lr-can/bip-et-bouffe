@@ -19,6 +19,7 @@ export function buildShoppingList(enrichedRecipes = []) {
           unite: ing.unite || '',
           quantite: ing.quantite || 0,
           cout: ing.cout || 0,
+          categorie: String(ing.categorie || '').trim() || 'Divers',
           sources: [recipe.nomRecette],
         })
       }
@@ -28,6 +29,24 @@ export function buildShoppingList(enrichedRecipes = []) {
   return [...map.values()].sort((a, b) =>
     String(a.nomIngr).localeCompare(String(b.nomIngr), 'fr'),
   )
+}
+
+/** Groupe la liste de courses par catégorie (tri FR). */
+export function groupShoppingByCategory(shoppingList = []) {
+  const groups = new Map()
+  for (const item of shoppingList) {
+    const cat = String(item.categorie || '').trim() || 'Divers'
+    if (!groups.has(cat)) groups.set(cat, [])
+    groups.get(cat).push(item)
+  }
+  return [...groups.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], 'fr'))
+    .map(([categorie, items]) => ({
+      categorie,
+      items: items
+        .slice()
+        .sort((a, b) => String(a.nomIngr).localeCompare(String(b.nomIngr), 'fr')),
+    }))
 }
 
 export async function copyShoppingList(text) {

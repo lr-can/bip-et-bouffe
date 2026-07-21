@@ -213,8 +213,8 @@ async function fetchJson(url) {
   return JSON.parse(text)
 }
 
-function pickBestProduct(query, products) {
-  const ranked = (products || [])
+function rankProducts(query, products) {
+  return (products || [])
     .filter((p) => {
       const n = p?.nutriments || {}
       return n['energy-kcal_100g'] != null || n.proteins_100g != null || n.fat_100g != null
@@ -229,10 +229,12 @@ function pickBestProduct(query, products) {
       const completeness = Number(p.completeness || 0) * 5
       return { ...p, _score: nameScore + frBonus + completeness }
     })
-    .filter((p) => p._score >= 40)
+    .filter((p) => p._score >= 30)
     .sort((a, b) => b._score - a._score)
+}
 
-  return ranked[0] || null
+function pickBestProduct(query, products) {
+  return rankProducts(query, products)[0] || null
 }
 
 function toNutritionResult(product) {
@@ -245,6 +247,68 @@ function toNutritionResult(product) {
     productName: [product.product_name, product.brands].filter(Boolean).join(' — '),
     barcode: product.code || '',
   }
+}
+
+/** Liste de résultats OFF pour la barre de recherche UI. */
+export async function searchOpenFoodFactsList(query, limit = 8) {
+  const q = String(query || '').trim()
+  if (!q) return []
+
+  const results = []
+  const seen = new Set()
+
+  const pushUnique = (item) => {
+    if (!item) return
+    const key = item.barcode || item.productName
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    results.push(item)
+  }
+
+  const hint = CATEGORY_HINTS.find((h) => h.match.test(q))
+  if (hint) {
+    try {
+      for (const cat of hint.categories.slice(0, 2)) {
+        const url = new URL('https://world.openfoodfacts.org/api/v2/search')
+        url.searchParams.set('categories_tags', cat)
+        url.searchParams.set('page_size', '20')
+        url.searchParams.set(
+          'fields',
+          'product_name,generic_name,brands,nutriments,code,completeness,countries_tags',
+        )
+        const data = await fetchJson(url)
+        for (const p of rankProducts(q, data.products).slice(0, limit)) {
+          pushUnique(toNutritionResult(p))
+          if (results.length >= limit) return results
+        }
+      }
+    } catch {
+      /* continue text search */
+    }
+  }
+
+  const url = new URL('https://world.openfoodfacts.org/cgi/search.pl')
+  url.searchParams.set('search_terms', q)
+  url.searchParams.set('search_simple', '1')
+  url.searchParams.set('action', 'process')
+  url.searchParams.set('json', '1')
+  url.searchParams.set('page_size', '40')
+  url.searchParams.set(
+    'fields',
+    'product_name,generic_name,brands,nutriments,code,completeness,countries_tags',
+  )
+
+  try {
+    const data = await fetchJson(url)
+    for (const p of rankProducts(q, data.products)) {
+      pushUnique(toNutritionResult(p))
+      if (results.length >= limit) break
+    }
+  } catch {
+    /* empty */
+  }
+
+  return results
 }
 
 async function searchOffByCategory(query, categories) {

@@ -106,6 +106,9 @@ const showNewIngredient = ref(false)
 const lookingUp = ref(false)
 const savingCatalog = ref(false)
 const nutritionPreview = ref(null)
+const offResults = ref([])
+const offSearched = ref(false)
+const manualNutrition = ref(false)
 const catalogFilter = ref('')
 const openCategories = ref({})
 const newIngredient = reactive({
@@ -116,6 +119,28 @@ const newIngredient = reactive({
   idAllergie: null,
   categorie: '',
 })
+
+const canSaveCatalog = computed(() => {
+  if (!newIngredient.nomIngr.trim()) return false
+  if (manualNutrition.value) return true
+  return Boolean(nutritionPreview.value?.found)
+})
+
+function resetNewIngredientPanel() {
+  showNewIngredient.value = false
+  nutritionPreview.value = null
+  offResults.value = []
+  offSearched.value = false
+  manualNutrition.value = false
+}
+
+function openNewIngredientPanel() {
+  nutritionPreview.value = null
+  offResults.value = []
+  offSearched.value = false
+  manualNutrition.value = false
+  showNewIngredient.value = true
+}
 
 const allergenSelectOptions = computed(() => [
   { label: 'Aucune', value: null },
@@ -394,30 +419,88 @@ function addSuggested(ing) {
   addExistingIngredient(ing)
 }
 
-async function lookupCatalogNutrition() {
+function applyOffResult(item, { asManual = false } = {}) {
+  if (!item) return
+  nutritionPreview.value = {
+    found: true,
+    kcal100: item.kcal100 || '',
+    proteines100: item.proteines100 || '',
+    glucides100: item.glucides100 || '',
+    lipides100: item.lipides100 || '',
+    nutritionSource: asManual ? 'manuel' : item.nutritionSource || 'openfoodfacts',
+    productName: item.productName || newIngredient.nomIngr,
+    barcode: item.barcode || '',
+  }
+  manualNutrition.value = asManual
+}
+
+function enableManualNutrition() {
+  const base = nutritionPreview.value || {}
+  nutritionPreview.value = {
+    found: true,
+    kcal100: base.kcal100 || '',
+    proteines100: base.proteines100 || '',
+    glucides100: base.glucides100 || '',
+    lipides100: base.lipides100 || '',
+    nutritionSource: 'manuel',
+    productName: newIngredient.nomIngr.trim() || base.productName || '',
+    barcode: '',
+  }
+  manualNutrition.value = true
+  offSearched.value = true
+}
+
+function exitManualNutrition() {
+  manualNutrition.value = false
+  if (offResults.value.length) {
+    const current = nutritionPreview.value
+    const match =
+      offResults.value.find((r) => r.barcode && r.barcode === current?.barcode) ||
+      offResults.value.find((r) => r.productName === current?.productName) ||
+      offResults.value[0]
+    applyOffResult(match)
+    return
+  }
+  if (newIngredient.nomIngr.trim()) {
+    searchOpenFoodFacts()
+  } else {
+    nutritionPreview.value = null
+  }
+}
+
+async function searchOpenFoodFacts() {
   const nomIngr = newIngredient.nomIngr.trim()
   if (!nomIngr) return
   lookingUp.value = true
   nutritionPreview.value = null
+  offResults.value = []
+  offSearched.value = false
+  manualNutrition.value = false
   try {
-    const looked = await sheetsApi.lookupNutrition(nomIngr)
-    if (!looked?.found) {
+    const data = await sheetsApi.searchNutrition(nomIngr, 8)
+    const results = Array.isArray(data?.results) ? data.results : []
+    offSearched.value = true
+    if (!results.length) {
       toast.add({
         severity: 'warn',
-        summary: 'Introuvable',
-        detail: 'Pas de macros trouvées pour ce nom — essaie un autre libellé.',
+        summary: 'Aucun résultat Open Food Facts',
+        detail: 'Tu peux saisir les macros à la main.',
         life: 3500,
       })
+      enableManualNutrition()
       return
     }
-    nutritionPreview.value = looked
+    offResults.value = results
+    applyOffResult(results[0])
   } catch (err) {
+    offSearched.value = true
     toast.add({
       severity: 'error',
       summary: 'Erreur',
-      detail: err.message || 'Recherche nutrition impossible',
+      detail: err.message || 'Recherche Open Food Facts impossible — saisie manuelle possible.',
       life: 3500,
     })
+    enableManualNutrition()
   } finally {
     lookingUp.value = false
   }
@@ -426,20 +509,23 @@ async function lookupCatalogNutrition() {
 async function addToCatalogAndRecipe() {
   const nomIngr = newIngredient.nomIngr.trim()
   if (!nomIngr) return
-  if (!nutritionPreview.value?.found) {
-    await lookupCatalogNutrition()
-    if (!nutritionPreview.value?.found) return
+  if (!canSaveCatalog.value) {
+    await searchOpenFoodFacts()
+    if (!canSaveCatalog.value) return
   }
 
   savingCatalog.value = true
   try {
     const idAllergie = newIngredient.idAllergie || ''
+    const preview = nutritionPreview.value || {}
     const nutrition = {
-      kcal100: nutritionPreview.value.kcal100 || '',
-      proteines100: nutritionPreview.value.proteines100 || '',
-      glucides100: nutritionPreview.value.glucides100 || '',
-      lipides100: nutritionPreview.value.lipides100 || '',
-      nutritionSource: nutritionPreview.value.nutritionSource || '',
+      kcal100: preview.kcal100 || '',
+      proteines100: preview.proteines100 || '',
+      glucides100: preview.glucides100 || '',
+      lipides100: preview.lipides100 || '',
+      nutritionSource: manualNutrition.value
+        ? 'manuel'
+        : preview.nutritionSource || 'openfoodfacts',
     }
     const idIngr = newId('ing')
     await sheets.addRow('ingredients', {
@@ -469,12 +555,11 @@ async function addToCatalogAndRecipe() {
       idAllergie: null,
       categorie: '',
     })
-    nutritionPreview.value = null
-    showNewIngredient.value = false
+    resetNewIngredientPanel()
     toast.add({
       severity: 'success',
       summary: 'Ajouté au catalogue',
-      detail: `${nomIngr} · ${macrosLabel(nutrition)}`,
+      detail: `${nomIngr} · ${macrosLabel(nutrition) || 'sans macros'}`,
       life: 2800,
     })
   } catch (err) {
@@ -1109,23 +1194,62 @@ onMounted(bootstrap)
           label="Ajouter un produit au catalogue"
           icon="pi pi-plus"
           text
-          @click="showNewIngredient = true"
+          @click="openNewIngredientPanel"
         />
 
         <div v-else class="new-ing">
           <p class="hint">
-            Recherche macros (Open Food Facts) → enregistrement catalogue → ajout à la recette.
+            Cherche sur Open Food Facts, choisis un produit, ou saisis les macros à la main si rien ne convient.
           </p>
-          <div class="grid-2">
-            <div class="field">
-              <label>Nom</label>
+
+          <div class="field off-search">
+            <label>Recherche Open Food Facts</label>
+            <div class="off-search-row">
               <InputText
                 v-model="newIngredient.nomIngr"
                 fluid
-                placeholder="Ex. Farine T55"
-                @keyup.enter="lookupCatalogNutrition"
+                placeholder="Ex. Farine T55, yaourt grec…"
+                @keyup.enter="searchOpenFoodFacts"
+              />
+              <Button
+                label="Chercher"
+                icon="pi pi-search"
+                class="cm-btn-cool"
+                rounded
+                :loading="lookingUp"
+                :disabled="!newIngredient.nomIngr.trim()"
+                @click="searchOpenFoodFacts"
               />
             </div>
+          </div>
+
+          <ul v-if="offResults.length && !manualNutrition" class="off-results" role="listbox">
+            <li
+              v-for="(item, idx) in offResults"
+              :key="item.barcode || item.productName || idx"
+              class="off-result"
+              :class="{ 'off-result--active': nutritionPreview?.barcode === item.barcode && nutritionPreview?.productName === item.productName }"
+              role="option"
+              @click="applyOffResult(item)"
+            >
+              <span class="off-result-name">{{ item.productName || 'Produit' }}</span>
+              <span class="off-result-macros muted">
+                {{ Math.round(Number(item.kcal100) || 0) }} kcal · P{{ item.proteines100 || 0 }} ·
+                G{{ item.glucides100 || 0 }} · L{{ item.lipides100 || 0 }}
+              </span>
+            </li>
+          </ul>
+
+          <Message
+            v-else-if="offSearched && !lookingUp && !manualNutrition && !nutritionPreview"
+            severity="warn"
+            :closable="false"
+            class="off-empty"
+          >
+            Aucun produit trouvé. Passe en saisie manuelle pour continuer.
+          </Message>
+
+          <div class="grid-2">
             <div class="field">
               <label>Catégorie</label>
               <Select
@@ -1138,7 +1262,16 @@ onMounted(bootstrap)
             </div>
             <div class="field">
               <label>Unité</label>
-              <Select v-model="newIngredient.unite" :options="UNIT_OPTIONS" optionLabel="label" optionValue="value" editable fluid placeholder="g, kg, CàS…" />            </div>
+              <Select
+                v-model="newIngredient.unite"
+                :options="UNIT_OPTIONS"
+                optionLabel="label"
+                optionValue="value"
+                editable
+                fluid
+                placeholder="g, kg, CàS…"
+              />
+            </div>
             <div class="field">
               <label>Prix unitaire</label>
               <InputNumber
@@ -1167,9 +1300,34 @@ onMounted(bootstrap)
             </div>
           </div>
 
-          <div v-if="nutritionPreview?.found" class="nutrition-preview">
-            <strong>{{ nutritionPreview.productName || newIngredient.nomIngr }}</strong>
-            <div class="macro-chip-row">
+          <div v-if="nutritionPreview" class="nutrition-preview">
+            <div class="nutrition-preview-head">
+              <strong>{{ nutritionPreview.productName || newIngredient.nomIngr }}</strong>
+              <span class="mini-chip mini-chip--neutral source-chip">
+                <i class="pi pi-database" />
+                Source : {{ manualNutrition ? 'manuel' : nutritionPreview.nutritionSource }}
+              </span>
+            </div>
+
+            <div v-if="manualNutrition" class="grid-2 macros-manual">
+              <div class="field">
+                <label>kcal / 100 g</label>
+                <InputText v-model="nutritionPreview.kcal100" fluid placeholder="0" />
+              </div>
+              <div class="field">
+                <label>Protéines / 100 g</label>
+                <InputText v-model="nutritionPreview.proteines100" fluid placeholder="0" />
+              </div>
+              <div class="field">
+                <label>Glucides / 100 g</label>
+                <InputText v-model="nutritionPreview.glucides100" fluid placeholder="0" />
+              </div>
+              <div class="field">
+                <label>Lipides / 100 g</label>
+                <InputText v-model="nutritionPreview.lipides100" fluid placeholder="0" />
+              </div>
+            </div>
+            <div v-else class="macro-chip-row">
               <span
                 v-for="badge in nutritionBadges(nutritionPreview)"
                 :key="badge.label"
@@ -1180,33 +1338,39 @@ onMounted(bootstrap)
                 {{ badge.label }}
               </span>
             </div>
-            <span class="mini-chip mini-chip--neutral source-chip">
-              <i class="pi pi-database" />
-              Source : {{ nutritionPreview.nutritionSource }}
-            </span>
           </div>
 
           <div class="new-ing-actions">
             <Button
-              label="Chercher les macros"
+              v-if="!manualNutrition"
+              label="Saisie manuelle"
+              icon="pi pi-pencil"
               outlined
               rounded
-              :loading="lookingUp"
-              @click="lookupCatalogNutrition"
+              @click="enableManualNutrition"
+            />
+            <Button
+              v-else
+              label="Revenir à Open Food Facts"
+              icon="pi pi-search"
+              outlined
+              rounded
+              :disabled="!offResults.length && !newIngredient.nomIngr.trim()"
+              @click="exitManualNutrition"
             />
             <Button
               label="Enregistrer et ajouter"
               class="cm-btn-cool"
               rounded
               :loading="savingCatalog"
-              :disabled="!nutritionPreview?.found"
+              :disabled="!canSaveCatalog"
               @click="addToCatalogAndRecipe"
             />
             <Button
               label="Annuler"
               text
               severity="secondary"
-              @click=";(showNewIngredient = false), (nutritionPreview = null)"
+              @click="resetNewIngredientPanel"
             />
           </div>
         </div>
@@ -1744,6 +1908,65 @@ h1 {
   border: 1px dashed var(--cm-border);
   display: grid;
   gap: 0.9rem;
+}
+
+.off-search-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.off-search-row :deep(.p-inputtext) {
+  flex: 1;
+  min-width: 0;
+}
+
+.off-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  max-height: 14rem;
+  overflow: auto;
+}
+
+.off-result {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.65rem;
+  border: 1px solid var(--cm-border);
+  cursor: pointer;
+  background: color-mix(in srgb, var(--cm-bg) 55%, transparent);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.off-result:hover,
+.off-result--active {
+  border-color: color-mix(in srgb, var(--cm-cool, #2a7a8c) 55%, var(--cm-border));
+  background: color-mix(in srgb, var(--cm-cool, #2a7a8c) 10%, transparent);
+}
+
+.off-result-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.off-result-macros {
+  font-size: 0.8rem;
+}
+
+.nutrition-preview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.75rem;
+  justify-content: space-between;
+}
+
+.macros-manual {
+  margin-top: 0.45rem;
 }
 
 .new-ing-actions {

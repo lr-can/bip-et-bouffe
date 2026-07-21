@@ -9,7 +9,7 @@ import {
   flagTrue,
   spiceLevel,
 } from '@/utils/recipe'
-import { buildShoppingList } from '@/composables/useShoppingList'
+import { buildShoppingList, groupShoppingByCategory } from '@/composables/useShoppingList'
 
 function emptyDay() {
   return {
@@ -147,11 +147,15 @@ export const useMenuStore = defineStore('menu', {
 
     shoppingText() {
       const lines = [`Liste de courses — ${this.nbJours} jour(s) · ${this.nbPersonnes} pers.`]
-      for (const item of this.shoppingList) {
-        const qty = Number.isInteger(item.quantite)
-          ? item.quantite
-          : Number(item.quantite.toFixed(2))
-        lines.push(`• ${item.nomIngr} — ${qty} ${item.unite || ''}`.trim())
+      for (const group of groupShoppingByCategory(this.shoppingList)) {
+        lines.push('')
+        lines.push(`▸ ${group.categorie}`)
+        for (const item of group.items) {
+          const qty = Number.isInteger(item.quantite)
+            ? item.quantite
+            : Number(item.quantite.toFixed(2))
+          lines.push(`☐ ${item.nomIngr} — ${qty} ${item.unite || ''}`.trim())
+        }
       }
       return lines.join('\n')
     },
