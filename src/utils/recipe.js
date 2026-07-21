@@ -1,15 +1,43 @@
 export const RECIPE_TYPES = [
+  { value: 'petit_dejeuner', label: 'Petit-déjeuner' },
   { value: 'entree', label: 'Entrée' },
   { value: 'plat', label: 'Plat' },
   { value: 'dessert', label: 'Dessert' },
+  { value: 'diner', label: 'Dîner' },
   { value: 'accompagnement', label: 'Accompagnement' },
   { value: 'boisson', label: 'Boisson' },
 ]
 
-export const MENU_CORE_TYPES = ['entree', 'plat', 'dessert']
+/** Slots d’un jour de planning (ordre d’affichage). */
+export const MENU_SLOT_TYPES = ['petit_dejeuner', 'entree', 'plat', 'dessert', 'diner']
+
+/** Cours du déjeuner que l’on peut activer/désactiver. */
+export const LUNCH_COURSE_TYPES = ['entree', 'plat', 'dessert']
+
+export const MENU_CORE_TYPES = MENU_SLOT_TYPES
+
+export const SLOT_META = {
+  petit_dejeuner: { label: 'Petit-déjeuner', short: 'Matin', icon: 'pi-sun', tone: 0 },
+  entree: { label: 'Entrée', short: 'Entrée', icon: 'pi-circle', tone: 1 },
+  plat: { label: 'Plat', short: 'Plat', icon: 'pi-stop', tone: 2 },
+  dessert: { label: 'Dessert', short: 'Dessert', icon: 'pi-heart', tone: 3 },
+  diner: { label: 'Dîner', short: 'Soir', icon: 'pi-moon', tone: 4 },
+}
 
 export function typeLabel(value) {
-  return RECIPE_TYPES.find((t) => t.value === value)?.label || value || '—'
+  return (
+    SLOT_META[value]?.label ||
+    RECIPE_TYPES.find((t) => t.value === value)?.label ||
+    value ||
+    '—'
+  )
+}
+
+/** Types catalogue utilisés pour remplir un slot (avec fallbacks). */
+export function recipeTypesForSlot(slot) {
+  if (slot === 'petit_dejeuner') return ['petit_dejeuner', 'plat', 'boisson']
+  if (slot === 'diner') return ['diner', 'plat']
+  return [slot]
 }
 
 export function newId(prefix) {

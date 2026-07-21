@@ -13,7 +13,12 @@ import Tag from 'primevue/tag'
 import { useSheetsStore } from '@/stores/sheets'
 import { useRecipesStore } from '@/stores/recipes'
 import { useMenuStore } from '@/stores/menu'
-import { MENU_CORE_TYPES, RECIPE_TYPES, typeLabel } from '@/utils/recipe'
+import {
+  RECIPE_TYPES,
+  LUNCH_COURSE_TYPES,
+  SLOT_META,
+  typeLabel,
+} from '@/utils/recipe'
 import { copyShoppingList } from '@/composables/useShoppingList'
 import { downloadMenuPdf } from '@/composables/useRecipePdf'
 import { useScrollReveal } from '@/composables/useScrollReveal'
@@ -28,10 +33,22 @@ const pickType = ref(null)
 const pickRecipe = ref(null)
 const replaceType = ref(null)
 const generating = ref(false)
+const rerolling = ref(null)
+const wizardStep = ref(0)
+const stepAnimKey = ref(0)
 const mealRowEls = ref([])
 
+const WIZARD_STEPS = [
+  { id: 'personnes', title: 'Pour combien ?', hint: 'Le nombre de convives pour calibrer quantités et coûts.' },
+  { id: 'jours', title: 'Sur combien de jours ?', hint: 'On prépare un menu jour par jour.' },
+  { id: 'repas', title: 'Quels repas ?', hint: 'Choisis ce qu’on doit composer chaque jour.' },
+  { id: 'ambiance', title: 'Quelle ambiance ?', hint: 'Optionnel — pour orienter le style des plats.' },
+  { id: 'allergies', title: 'Des allergies à éviter ?', hint: 'On écartera les recettes concernées.' },
+  { id: 'budget', title: 'Un budget par jour ?', hint: 'Laisse vide si tu préfères sans limite.' },
+]
+
 const { refresh: refreshReveal } = useScrollReveal(mealRowEls, {
-  resetOn: () => [menu.activeDay, menu.allSelectedIds.join('|'), menu.nbJours],
+  resetOn: () => [menu.activeDay, menu.allSelectedIds.join('|'), menu.nbJours, menu.phase],
 })
 
 function onMealTimelineMounted(el) {
@@ -68,17 +85,21 @@ const selectedAllergies = computed({
 })
 
 const activeDay = computed(() => menu.currentDay)
+const currentWizard = computed(() => WIZARD_STEPS[wizardStep.value])
+const wizardProgress = computed(() => ((wizardStep.value + 1) / WIZARD_STEPS.length) * 100)
 
 const pickPool = computed(() => {
   let list = recipes.all
   if (pickType.value) list = list.filter((r) => r.type === pickType.value)
-  const dayIds = [
+  const ids = [
+    activeDay.value.petit_dejeuner,
     activeDay.value.entree,
     activeDay.value.plat,
     activeDay.value.dessert,
+    activeDay.value.diner,
     ...(activeDay.value.extras || []),
   ]
-  return list.filter((r) => !dayIds.includes(r.idRecette))
+  return list.filter((r) => !ids.includes(r.idRecette))
 })
 
 watch(
@@ -88,9 +109,16 @@ watch(
   },
 )
 
+function goWizard(delta) {
+  const next = wizardStep.value + delta
+  if (next < 0 || next >= WIZARD_STEPS.length) return
+  wizardStep.value = next
+  stepAnimKey.value += 1
+}
+
 function openReplace(type) {
   replaceType.value = type
-  pickType.value = type
+  pickType.value = type === 'petit_dejeuner' || type === 'diner' ? type : type
   pickRecipe.value = null
   addOpen.value = true
 }
@@ -114,7 +142,7 @@ function confirmPick() {
 
 async function generate() {
   generating.value = true
-  await new Promise((r) => setTimeout(r, 220))
+  await new Promise((r) => setTimeout(r, 280))
   const result = menu.generate()
   generating.value = false
 
@@ -122,7 +150,7 @@ async function generate() {
     toast.add({
       severity: 'warn',
       summary: 'Pas assez de recettes',
-      detail: 'Il faut au moins une entrée, un plat et un dessert dans le carnet.',
+      detail: 'Ajoute des recettes au carnet (petit-déj, plats, desserts…).',
       life: 4000,
     })
     return
@@ -132,17 +160,38 @@ async function generate() {
     toast.add({
       severity: 'warn',
       summary: 'Planning partiel',
-      detail: `${result.daysFilled}/${result.daysRequested} jour(s) remplis — ajoute plus de recettes par type.`,
+      detail: `${result.daysFilled}/${result.daysRequested} jour(s) remplis — complète le carnet.`,
       life: 4200,
+    })
+  } else {
+    toast.add({
+      severity: 'success',
+      summary: 'Planning prêt',
+      detail: `${result.daysRequested} jour(s) · ${result.recipes} repas`,
+      life: 3200,
+    })
+  }
+}
+
+async function rollDice(type) {
+  rerolling.value = type
+  await new Promise((r) => setTimeout(r, 180))
+  const picked = menu.rerollSlot(type)
+  rerolling.value = null
+  if (!picked) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Pas d’alternative',
+      detail: `Aucune autre recette pour « ${typeLabel(type)} ».`,
+      life: 2800,
     })
     return
   }
-
   toast.add({
     severity: 'success',
-    summary: 'Planning prêt',
-    detail: `${result.daysRequested} jour(s) couverts · ${result.recipes} recettes`,
-    life: 3200,
+    summary: 'Nouveau tirage',
+    detail: picked.nomRecette,
+    life: 2200,
   })
 }
 
@@ -178,6 +227,12 @@ function slotRecipe(type) {
   return id ? recipes.enriched(id, menu.nbPersonnes) : null
 }
 
+function backToWizard() {
+  menu.setPhase('wizard')
+  wizardStep.value = 0
+  stepAnimKey.value += 1
+}
+
 onMounted(() => {
   sheets.ensureLoaded().catch(() => {})
   menu.setNbJours(menu.nbJours)
@@ -191,12 +246,24 @@ onMounted(() => {
       <div>
         <p class="eyebrow">Planning entre amis</p>
         <h1 class="cm-display">
-          <span class="cm-grad-text">Menus sur {{ menu.nbJours }} jour{{ menu.nbJours > 1 ? 's' : '' }}</span>
+          <span class="cm-grad-text">
+            {{ menu.phase === 'wizard' ? 'Compose ton menu' : `Menus sur ${menu.nbJours} jour${menu.nbJours > 1 ? 's' : ''}` }}
+          </span>
         </h1>
         <p class="lede">
-          Indique tes préférences, les allergies à éviter, puis génère un planning varié.
+          {{ menu.phase === 'wizard'
+            ? 'Réponds aux questions, on s’occupe du reste.'
+            : 'Relance un repas au hasard, remplace une idée, ou repars du questionnaire.' }}
         </p>
       </div>
+      <Button
+        v-if="menu.phase === 'plan'"
+        label="Nouveau questionnaire"
+        icon="pi pi-replay"
+        outlined
+        rounded
+        @click="backToWizard"
+      />
     </header>
 
     <Message v-if="sheets.error" severity="error">
@@ -207,57 +274,139 @@ onMounted(() => {
       <ProgressSpinner :strokeWidth="3" />
     </div>
 
-    <template v-else>
-      <div class="control-bar cm-rise cm-rise-delay-1">
-        <div class="field">
-          <label>Jours</label>
-          <InputNumber v-model="menu.nbJours" :min="1" :max="14" showButtons fluid />
+    <template v-else-if="menu.phase === 'wizard'">
+      <div class="wizard cm-rise">
+        <div class="wizard-progress" aria-hidden="true">
+          <div class="wizard-progress-bar" :style="{ width: wizardProgress + '%' }" />
         </div>
-        <div class="field">
-          <label>Personnes</label>
-          <InputNumber v-model="menu.nbPersonnes" :min="1" :max="30" showButtons fluid />
-        </div>
-        <div class="field">
-          <label>Ambiance</label>
-          <Select
-            v-model="menu.mood"
-            :options="moodOptions"
-            optionLabel="label"
-            optionValue="value"
-            fluid
-            placeholder="Tous"
+        <div class="wizard-steps-dots">
+          <button
+            v-for="(step, i) in WIZARD_STEPS"
+            :key="step.id"
+            type="button"
+            class="wiz-dot"
+            :class="{ active: i === wizardStep, done: i < wizardStep }"
+            :aria-label="step.title"
+            @click="wizardStep = i; stepAnimKey += 1"
           />
         </div>
-        <div class="field">
-          <label>Budget / jour (€)</label>
-          <InputNumber
-            v-model="menu.budgetParJour"
-            :min="0"
-            mode="decimal"
-            :minFractionDigits="0"
-            :maxFractionDigits="2"
-            placeholder="Libre"
-            fluid
-          />
-        </div>
-        <div class="field allergies-field">
-          <label>Allergies à éviter</label>
-          <MultiSelect
-            v-model="selectedAllergies"
-            :options="allergyAvoidOptions"
-            optionLabel="label"
-            optionValue="value"
-            placeholder="Choisir dans la liste allergènes…"
-            display="chip"
-            filter
-            fluid
-          />
-        </div>
-        <div class="generate-row">
+
+        <Transition name="wiz-slide" mode="out-in">
+          <div :key="stepAnimKey" class="wizard-card">
+            <p class="wiz-kicker">Étape {{ wizardStep + 1 }} / {{ WIZARD_STEPS.length }}</p>
+            <h2 class="cm-display wiz-title">{{ currentWizard.title }}</h2>
+            <p class="wiz-hint">{{ currentWizard.hint }}</p>
+
+            <div v-if="currentWizard.id === 'personnes'" class="wiz-answer big-number">
+              <InputNumber v-model="menu.nbPersonnes" :min="1" :max="30" showButtons />
+              <span class="wiz-unit">personne{{ menu.nbPersonnes > 1 ? 's' : '' }}</span>
+            </div>
+
+            <div v-else-if="currentWizard.id === 'jours'" class="wiz-answer big-number">
+              <InputNumber v-model="menu.nbJours" :min="1" :max="14" showButtons />
+              <span class="wiz-unit">jour{{ menu.nbJours > 1 ? 's' : '' }}</span>
+            </div>
+
+            <div v-else-if="currentWizard.id === 'repas'" class="wiz-answer meal-picks">
+              <button
+                type="button"
+                class="meal-toggle"
+                :class="{ on: menu.includePetitDejeuner }"
+                @click="menu.includePetitDejeuner = !menu.includePetitDejeuner"
+              >
+                <i class="pi pi-sun" />
+                <span>Petit-déjeuner</span>
+              </button>
+
+              <div class="lunch-block">
+                <p class="lunch-label">Déjeuner</p>
+                <div class="lunch-toggles">
+                  <button
+                    v-for="course in LUNCH_COURSE_TYPES"
+                    :key="course"
+                    type="button"
+                    class="meal-toggle"
+                    :class="{ on: menu.includeCourses[course] }"
+                    @click="menu.toggleCourse(course)"
+                  >
+                    <i class="pi" :class="SLOT_META[course].icon" />
+                    <span>{{ SLOT_META[course].label }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                class="meal-toggle"
+                :class="{ on: menu.includeDiner }"
+                @click="menu.includeDiner = !menu.includeDiner"
+              >
+                <i class="pi pi-moon" />
+                <span>Dîner</span>
+              </button>
+            </div>
+
+            <div v-else-if="currentWizard.id === 'ambiance'" class="wiz-answer">
+              <Select
+                v-model="menu.mood"
+                :options="moodOptions"
+                optionLabel="label"
+                optionValue="value"
+                fluid
+                placeholder="Toutes les ambiances"
+              />
+            </div>
+
+            <div v-else-if="currentWizard.id === 'allergies'" class="wiz-answer">
+              <MultiSelect
+                v-model="selectedAllergies"
+                :options="allergyAvoidOptions"
+                optionLabel="label"
+                optionValue="value"
+                placeholder="Aucune — ou choisis…"
+                display="chip"
+                filter
+                fluid
+              />
+            </div>
+
+            <div v-else-if="currentWizard.id === 'budget'" class="wiz-answer big-number">
+              <InputNumber
+                v-model="menu.budgetParJour"
+                :min="0"
+                mode="decimal"
+                :minFractionDigits="0"
+                :maxFractionDigits="2"
+                placeholder="Libre"
+                showButtons
+              />
+              <span class="wiz-unit">€ / jour</span>
+            </div>
+          </div>
+        </Transition>
+
+        <div class="wizard-nav">
           <Button
+            label="Retour"
+            text
+            severity="secondary"
+            :disabled="wizardStep === 0"
+            @click="goWizard(-1)"
+          />
+          <Button
+            v-if="wizardStep < WIZARD_STEPS.length - 1"
+            label="Continuer"
+            icon="pi pi-arrow-right"
+            iconPos="right"
+            class="cm-btn-warm"
+            rounded
+            @click="goWizard(1)"
+          />
+          <Button
+            v-else
             label="Générer le planning"
             icon="pi pi-bolt"
-            class="cm-btn-warm gen-btn"
+            class="cm-btn-cool"
             rounded
             size="large"
             :loading="generating"
@@ -265,8 +414,10 @@ onMounted(() => {
           />
         </div>
       </div>
+    </template>
 
-      <div class="day-rail cm-rise cm-rise-delay-2" role="tablist" aria-label="Jours du planning">
+    <template v-else>
+      <div class="day-rail cm-rise" role="tablist" aria-label="Jours du planning">
         <button
           v-for="(day, i) in menu.planSummary"
           :key="i"
@@ -296,28 +447,29 @@ onMounted(() => {
               {{ menu.dayCost(menu.activeDay).toFixed(2) }} € estimés
               <template v-if="menu.dayNutrition(menu.activeDay).kcal">
                 · {{ Math.round(menu.dayNutrition(menu.activeDay).kcal) }} kcal/pers
-                (P {{ menu.dayNutrition(menu.activeDay).proteines }}g /
-                G {{ menu.dayNutrition(menu.activeDay).glucides }}g /
-                L {{ menu.dayNutrition(menu.activeDay).lipides }}g)
               </template>
             </p>
           </div>
           <div class="day-panel-actions">
             <Button icon="pi pi-trash" rounded text severity="secondary" aria-label="Vider le jour" @click="menu.clearDay()" />
             <Button label="Ajouter" icon="pi pi-plus" rounded outlined @click="openAddExtra" />
+            <Button label="Régénérer" icon="pi pi-bolt" class="cm-btn-warm" rounded @click="generate" :loading="generating" />
           </div>
         </div>
 
         <div :key="menu.activeDay" :ref="onMealTimelineMounted" class="meal-timeline">
           <div
-            v-for="(type, idx) in MENU_CORE_TYPES"
+            v-for="(type, idx) in menu.activeSlots"
             :key="`${menu.activeDay}-${type}`"
             class="meal-row cm-reveal"
-            :class="`cm-reveal-delay-${idx + 1}`"
+            :class="`cm-reveal-delay-${(idx % 5) + 1}`"
           >
-            <div class="meal-marker" :class="`tone-${idx}`" />
+            <div class="meal-marker" :class="`tone-${SLOT_META[type]?.tone ?? idx}`" />
             <div class="meal-body">
-              <div class="meal-label">{{ typeLabel(type) }}</div>
+              <div class="meal-label">
+                <i class="pi" :class="SLOT_META[type]?.icon || 'pi-circle'" />
+                {{ typeLabel(type) }}
+              </div>
               <template v-if="slotRecipe(type)">
                 <RouterLink :to="`/recette/${slotRecipe(type).idRecette}`" class="meal-card filled">
                   <div>
@@ -331,13 +483,53 @@ onMounted(() => {
                   </div>
                 </RouterLink>
                 <div class="meal-actions">
-                  <Button icon="pi pi-refresh" rounded text @click="openReplace(type)" />
+                  <Button
+                    class="dice-btn"
+                    rounded
+                    text
+                    :loading="rerolling === type"
+                    aria-label="Tirer au hasard"
+                    title="Tirer une autre recette"
+                    @click="rollDice(type)"
+                  >
+                    <svg v-if="rerolling !== type" class="dice-svg" viewBox="0 0 24 24" aria-hidden="true">
+                      <rect x="3" y="3" width="18" height="18" rx="4" fill="currentColor" opacity="0.12" />
+                      <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+                      <circle cx="8.5" cy="8.5" r="1.35" fill="currentColor" />
+                      <circle cx="15.5" cy="8.5" r="1.35" fill="currentColor" />
+                      <circle cx="12" cy="12" r="1.35" fill="currentColor" />
+                      <circle cx="8.5" cy="15.5" r="1.35" fill="currentColor" />
+                      <circle cx="15.5" cy="15.5" r="1.35" fill="currentColor" />
+                    </svg>
+                  </Button>
+                  <Button icon="pi pi-search" rounded text aria-label="Choisir" @click="openReplace(type)" />
                   <Button icon="pi pi-times" rounded text severity="danger" @click="menu.clearSlot(type)" />
                 </div>
               </template>
-              <button v-else type="button" class="meal-card empty" @click="openReplace(type)">
-                Choisir une {{ typeLabel(type).toLowerCase() }}
-              </button>
+              <div v-else class="meal-empty-row">
+                <button type="button" class="meal-card empty" @click="openReplace(type)">
+                  Choisir — {{ typeLabel(type).toLowerCase() }}
+                </button>
+                <Button
+                  class="dice-btn"
+                  rounded
+                  text
+                  :loading="rerolling === type"
+                  aria-label="Tirer au hasard"
+                  title="Tirer une autre recette"
+                  @click="rollDice(type)"
+                >
+                  <svg v-if="rerolling !== type" class="dice-svg" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="4" fill="currentColor" opacity="0.12" />
+                    <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3.25" fill="none" stroke="currentColor" stroke-width="1.5" />
+                    <circle cx="8.5" cy="8.5" r="1.35" fill="currentColor" />
+                    <circle cx="15.5" cy="8.5" r="1.35" fill="currentColor" />
+                    <circle cx="12" cy="12" r="1.35" fill="currentColor" />
+                    <circle cx="8.5" cy="15.5" r="1.35" fill="currentColor" />
+                    <circle cx="15.5" cy="15.5" r="1.35" fill="currentColor" />
+                  </svg>
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -390,7 +582,6 @@ onMounted(() => {
             @click="exportPdf"
           />
         </div>
-
         <ul v-if="menu.shoppingList.length" class="shop-preview">
           <li v-for="item in menu.shoppingList.slice(0, 8)" :key="item.idIngr">
             <span>{{ item.nomIngr }}</span>
@@ -479,82 +670,189 @@ h1 {
   line-height: 1.45;
 }
 
-.gen-btn {
-  flex-shrink: 0;
+/* —— Wizard —— */
+.wizard {
+  max-width: 40rem;
+  margin: 0 auto;
+  display: grid;
+  gap: 1rem;
 }
 
-.control-bar {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.85rem 0.75rem;
-  align-items: end;
-  padding: 1.1rem 1.15rem;
-  border-radius: 1.25rem;
+.wizard-progress {
+  height: 0.35rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cm-border) 80%, transparent);
+  overflow: hidden;
+}
+
+.wizard-progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--cm-grad-warm);
+  transition: width 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.wizard-steps-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.45rem;
+}
+
+.wiz-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  border: 0;
+  padding: 0;
+  background: var(--cm-border);
+  cursor: pointer;
+  transition: transform 0.2s ease, background 0.2s ease, width 0.25s ease;
+}
+
+.wiz-dot.active {
+  width: 1.4rem;
+  background: var(--cm-grad-warm);
+}
+
+.wiz-dot.done {
+  background: color-mix(in srgb, var(--cm-orange, #ff6b35) 70%, #fff);
+}
+
+.wizard-card {
+  padding: 1.6rem 1.45rem 1.5rem;
+  border-radius: 1.5rem;
   border: 1px solid var(--cm-border);
-  background: var(--cm-surface);
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--cm-orange) 8%, transparent), transparent 42%),
+    var(--cm-surface);
   backdrop-filter: blur(10px);
-  margin-bottom: 1rem;
-}
-
-.field {
+  min-height: 16rem;
   display: grid;
-  gap: 0.28rem;
-  min-width: 0;
+  align-content: start;
+  gap: 0.55rem;
 }
 
-.field.grow,
-.allergies-field {
-  grid-column: 1 / -1;
-}
-
-.field label {
-  font-size: 0.78rem;
+.wiz-kicker {
+  margin: 0;
+  font-size: 0.75rem;
   font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--cm-muted);
 }
 
-.field :deep(.p-inputtext),
-.field :deep(.p-select),
-.field :deep(.p-inputnumber),
-.field :deep(.p-inputnumber-input) {
-  width: 100%;
+.wiz-title {
+  margin: 0;
+  font-size: clamp(1.6rem, 3.5vw, 2.2rem);
 }
 
-.field :deep(.p-inputnumber) {
+.wiz-hint {
+  margin: 0 0 0.75rem;
+  color: var(--cm-muted);
+}
+
+.wiz-answer {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.big-number {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.85rem;
 }
 
-.generate-row {
-  grid-column: 1 / -1;
+.big-number :deep(.p-inputnumber-input) {
+  font-size: 1.6rem;
+  font-weight: 700;
+  width: 6rem;
+  text-align: center;
+}
+
+.wiz-unit {
+  font-size: 1.15rem;
+  font-weight: 650;
+  color: var(--cm-muted);
+}
+
+.meal-picks {
+  gap: 0.85rem;
+}
+
+.lunch-block {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.85rem;
+  border-radius: 1rem;
+  border: 1px dashed var(--cm-border);
+  background: color-mix(in srgb, var(--cm-bg) 40%, transparent);
+}
+
+.lunch-label {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cm-muted);
+}
+
+.lunch-toggles {
   display: flex;
-  justify-content: flex-end;
-  padding-top: 0.25rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
-.gen-btn {
-  min-width: min(100%, 240px);
+.meal-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--cm-border);
+  background: transparent;
+  color: var(--cm-text);
+  border-radius: 999px;
+  padding: 0.55rem 0.95rem;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
-.w-full {
-  width: 100%;
+.meal-toggle:hover {
+  transform: translateY(-1px);
 }
 
-@media (max-width: 900px) {
-  .control-bar {
-    grid-template-columns: 1fr 1fr;
-  }
+.meal-toggle.on {
+  border-color: transparent;
+  background: var(--cm-grad-warm);
+  color: #fff;
+  box-shadow: 0 10px 22px var(--cm-glow);
 }
 
-@media (max-width: 560px) {
-  .control-bar {
-    grid-template-columns: 1fr;
-  }
-
-  .gen-btn {
-    width: 100%;
-  }
+.wizard-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
 }
 
+.wiz-slide-enter-active,
+.wiz-slide-leave-active {
+  transition: opacity 0.28s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.wiz-slide-enter-from {
+  opacity: 0;
+  transform: translateX(18px);
+}
+
+.wiz-slide-leave-to {
+  opacity: 0;
+  transform: translateX(-14px);
+}
+
+/* —— Plan —— */
 .day-rail {
   display: flex;
   gap: 0.5rem;
@@ -626,6 +924,7 @@ h1 {
 
 .day-panel-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
   align-items: center;
 }
@@ -637,16 +936,31 @@ h1 {
 
 .meal-timeline {
   display: grid;
-  gap: 1.35rem;
+  gap: 1.1rem;
   padding-block: 0.35rem 0.75rem;
 }
 
 .meal-row {
   display: grid;
-  grid-template-columns: 1rem 1fr auto;
+  grid-template-columns: 1rem 1fr;
   gap: 0.85rem;
   align-items: stretch;
-  min-height: 7.5rem;
+  min-height: 6.5rem;
+}
+
+.meal-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.meal-empty-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem;
+  align-items: center;
+  grid-column: 1 / -1;
 }
 
 .meal-marker {
@@ -654,16 +968,6 @@ h1 {
   border-radius: 999px;
   background: var(--cm-grad-warm);
   min-height: 100%;
-  transform-origin: top center;
-  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.meal-row.cm-reveal.in .meal-marker {
-  transform: scaleY(1);
-}
-
-.meal-row.cm-reveal:not(.in) .meal-marker {
-  transform: scaleY(0.35);
 }
 
 .meal-marker.tone-1 {
@@ -674,13 +978,25 @@ h1 {
   background: linear-gradient(180deg, #ff4d8d, #06b6d4);
 }
 
+.meal-marker.tone-3 {
+  background: linear-gradient(180deg, #fbbf24, #f97316);
+}
+
+.meal-marker.tone-4 {
+  background: linear-gradient(180deg, #6366f1, #06b6d4);
+}
+
 .meal-label {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--cm-muted);
-  margin-bottom: 0.45rem;
+  margin-bottom: 0.15rem;
 }
 
 .meal-card {
@@ -688,21 +1004,23 @@ h1 {
   align-items: center;
   width: 100%;
   text-align: left;
-  padding: 1.15rem 1.2rem;
+  padding: 1rem 1.1rem;
   border-radius: 1.15rem;
   border: 1px solid var(--cm-border);
   background: color-mix(in srgb, var(--cm-bg) 55%, transparent);
-  min-height: 5.5rem;
+  min-height: 4.8rem;
   transition: box-shadow 0.35s ease, transform 0.35s ease;
+  color: inherit;
+  text-decoration: none;
 }
 
-.meal-row.cm-reveal.in .meal-card.filled:hover {
+.meal-card.filled:hover {
   transform: translateY(-2px);
   box-shadow: 0 14px 30px var(--cm-glow);
 }
 
 .meal-card.filled strong {
-  font-size: 1.05rem;
+  font-size: 1.02rem;
 }
 
 .meal-card.filled p {
@@ -719,13 +1037,34 @@ h1 {
   border-style: dashed;
   color: var(--cm-muted);
   cursor: pointer;
-  min-height: 3.4rem;
+  min-height: 3.2rem;
 }
 
 .meal-actions {
   display: flex;
   flex-direction: column;
   justify-content: center;
+}
+
+.dice-btn {
+  width: 2.4rem;
+  height: 2.4rem;
+}
+
+.dice-svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  display: block;
+}
+
+.dice-btn:active .dice-svg {
+  animation: dice-shake 0.35s ease;
+}
+
+@keyframes dice-shake {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-18deg) scale(1.08); }
+  75% { transform: rotate(16deg) scale(1.08); }
 }
 
 .extras {
@@ -814,6 +1153,21 @@ h1 {
   gap: 0.9rem;
 }
 
+.field {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.field label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--cm-muted);
+}
+
+.w-full {
+  width: 100%;
+}
+
 .loading {
   display: grid;
   place-items: center;
@@ -826,14 +1180,22 @@ h1 {
     align-items: stretch;
   }
 
-  .meal-row {
-    grid-template-columns: 0.55rem 1fr;
+  .meal-body {
+    grid-template-columns: 1fr;
   }
 
   .meal-actions {
-    grid-column: 2;
     flex-direction: row;
     justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wiz-slide-enter-active,
+  .wiz-slide-leave-active,
+  .dice-btn:active {
+    transition: none;
+    animation: none;
   }
 }
 </style>

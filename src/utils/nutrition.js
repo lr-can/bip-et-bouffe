@@ -5,7 +5,7 @@ import { toNumber } from '@/utils/recipe'
  * Aligné sur le catalogue Mercurial.
  */
 const PIECE_GRAMS = [
-  { match: /\b[oœ]ufs?\b/i, g: 60 },
+  { match: /\boeufs?\b/i, g: 60 },
   { match: /feuilles?\s*de\s*brick/i, g: 20 },
   { match: /feuilles?\s*de\s*riz/i, g: 10 },
   { match: /wraps?/i, g: 60 },
@@ -15,8 +15,8 @@ const PIECE_GRAMS = [
   { match: /kiwi/i, g: 80 },
   { match: /mangue/i, g: 350 },
   { match: /courgette/i, g: 200 },
-  { match: /[eé]chalotte/i, g: 30 },
-  { match: /ail/i, g: 5 },
+  { match: /echalotte/i, g: 30 },
+  { match: /\bail\b/i, g: 5 },
   { match: /oignon/i, g: 100 },
   { match: /choux?\s*rouge/i, g: 800 },
   { match: /betternut|butternut/i, g: 1000 },
@@ -32,12 +32,16 @@ const PIECE_GRAMS = [
   { match: /tomate/i, g: 120 },
   { match: /carotte/i, g: 80 },
   { match: /pain|tranche/i, g: 40 },
+  { match: /patate\s*douce|patates?\s*douces?/i, g: 200 },
 ]
 
 function pieceWeightGrams(name) {
   const n = String(name || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
   for (const row of PIECE_GRAMS) {
-    if (row.match.test(n)) return row.g
+    if (row.match.test(n) || row.match.test(name || '')) return row.g
   }
   return 100
 }
