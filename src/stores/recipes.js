@@ -102,7 +102,7 @@ export const useRecipesStore = defineStore('recipes', {
             return name.includes(pattern.toLowerCase())
           }
         })
-      },
+      }
     },
 
     moods() {
